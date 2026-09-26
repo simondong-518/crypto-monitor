@@ -44,7 +44,7 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
                 sell += 1.5
             else:
                 buy += 0.5
-    # 连续2根长下影+跌到下轨：卖分减2，不割在支撑位
+    # 连续2根长下影+跌到下轨+从最低点反弹1-3%：卖分减2，加买分
     row1 = df.iloc[-1]
     row2 = df.iloc[-2]
     body1 = abs(row1['close'] - row1['open'])
@@ -52,8 +52,12 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     body2 = abs(row2['close'] - row2['open'])
     lower2 = min(row2['open'], row2['close']) - row2['low']
     two_lower = lower1 > body1*2 and lower2 > body2*2
-    if two_lower and close <= ind_s['boll_l']*1.01:
+    recent_low = min(row1['low'], row2['low'])
+    rebound_pct = (close - recent_low)/recent_low*100
+    rebound_ok = 1 <= rebound_pct <=3
+    if two_lower and close <= ind_s['boll_l']*1.01 and rebound_ok:
         sell -= 2
+        buy +=1
     # RSI规则（双周期共振）
     # 上涨途中不随便喊卖：只有连续2根长上影才加RSI卖分
     row1 = df.iloc[-1]
@@ -62,7 +66,7 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     upper1 = row1['high'] - max(row1['open'], row1['close'])
     body2 = abs(row2['close'] - row2['open'])
     upper2 = row2['high'] - max(row2['open'], row2['close'])
-    two_upper = upper1 > body1*1.5 and upper2 > body2*1.5
+    two_upper = upper1 > body1*2 and upper2 > body2*2 and ind_s['boll_all_up']
     # 15m RSI
     if ind_s['rsi'] <30: buy +=1
     elif ind_s['rsi']>80 and two_upper: sell +=1.5
