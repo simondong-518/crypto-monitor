@@ -66,9 +66,20 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     # 资金规则
     if flow['net_inflow'] > 1000: buy +=1
     if flow['net_inflow'] < -1000: sell +=1
-    # 大户多空比
-    if top_ratio < 0.7: sell +=1
-    if top_ratio > 1.3: buy +=1
+    # MACD金叉/死叉
+    if ind_s['macd_gold']: buy +=1
+    if ind_s['macd_dead']: sell +=1
+    # KDJ打分
+    if ind_s['kdj_j'] < 0: buy +=1
+    if ind_s['kdj_j'] > 100: sell +=1
+    if ind_s['k_gold']: buy +=0.5
+    if ind_s['k_dead']: sell +=0.5
+    # 大户多空比：阈值改成>1.1买，<0.9卖
+    if top_ratio < 0.9: sell +=1
+    if top_ratio > 1.1: buy +=1
+    # 资金持续流出时，就算到下轨也不抄底：买分减1
+    if flow['net_inflow'] < -1000 and close <= ind_s['boll_l']*1.01:
+        buy -= 1
     # BOLL收口降权
     boll_width = (ind_s['boll_u'] - ind_s['boll_l']) / ind_s['boll_m']
     if boll_width < 0.03:

@@ -53,6 +53,23 @@ def get_indicator(pair, interval):
     # 趋势判断：收盘价在MA20上方
     ma20 = df['close'].rolling(20).mean().iloc[-1]
     trend_up = now > ma20
+    # 算MACD
+    ef = df['close'].ewm(span=12).mean()
+    es = df['close'].ewm(span=26).mean()
+    dif = ef - es
+    dea = dif.ewm(span=9).mean()
+    macd_gold = dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-2] <= dea.iloc[-2]
+    macd_dead = dif.iloc[-1] < dea.iloc[-1] and dif.iloc[-2] >= dea.iloc[-2]
+    # 算KDJ
+    low9 = df['low'].rolling(9).min()
+    high9 = df['high'].rolling(9).max()
+    rsv = ((df['close'] - low9)/(high9 - low9)*100).fillna(50)
+    k = rsv.ewm(com=2).mean()
+    d = k.ewm(com=2).mean()
+    j = 3*k - 2*d
+    kdj_j = j.iloc[-1]
+    k_gold = k.iloc[-1] > d.iloc[-1] and k.iloc[-2] <= d.iloc[-2]
+    k_dead = k.iloc[-1] < d.iloc[-1] and k.iloc[-2] >= d.iloc[-2]
     return {
         'close': now,
         'boll_m': mid.iloc[-1],
@@ -61,6 +78,11 @@ def get_indicator(pair, interval):
         'rsi': rsi.iloc[-1],
         'day_chg': day_chg,
         'trend_up': trend_up,
+        'macd_gold': macd_gold,
+        'macd_dead': macd_dead,
+        'kdj_j': kdj_j,
+        'k_gold': k_gold,
+        'k_dead': k_dead,
         'df': df
     }
 
