@@ -131,6 +131,9 @@ def monitor_once():
             elif ind_l['rsi']>70: rsi_judge.append("1h瓒呬拱")
             else: rsi_judge.append("1h涓€?)
             lines.append(f"| RSI | 15m {ind_s['rsi']:.1f} / 1h {ind_l['rsi']:.1f} | {', '.join(rsi_judge)} |")
+            # 1h趋势
+            l_space = (ind_l['boll_u'] - ind_l['close'])/ind_l['close']*100
+            lines.append(f"| 1h趋势 | BOLL上轨{ind_l['boll_u']:.4f} | 离上轨{l_space:.1f}%，{'上涨' if ind_l['trend_up'] else '下跌'}")
             flow_judge = "鏄庢樉娴佸叆" if flow['net_inflow']>1000 else ("鏄庢樉娴佸嚭" if flow['net_inflow']<-1000 else "骞宠　")
             lines.append(f"| 璧勯噾娴佸悜 | ${flow['net_inflow']:.0f} | {flow_judge} |")
             lines.append(f"| 澶ф埛澶氱┖姣?| {top_ratio:.2f} | {'鍋忕┖' if top_ratio<0.7 else '鍋忓' if top_ratio>1.3 else '骞宠　'} |")
