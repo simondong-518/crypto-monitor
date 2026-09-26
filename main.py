@@ -72,6 +72,10 @@ def monitor_once():
             # 日线大趋势过滤：日线向下，买分减1.5
             if not daily_up:
                 b_score -= 1.5
+            # 4小时大趋势过滤
+            ind_4h = get_indicator(pair, "4h")
+            if not ind_4h['trend_up']:
+                b_score -= 1
             current_signal, reverse_alert = get_signal(coin, b_score, s_score, ind_s, ind_l)
             # 生成提醒
             alerts = []
