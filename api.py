@@ -28,14 +28,14 @@ def get_ls(pair):
     except: return None
 
 def get_btc_chg():
-    # 修复：算BTC当天涨幅
+    # 修复：算BTC当天涨幅（GATE ts是秒级）
     data = get_kline("BTC_USDT", "15m", 500)
     import pandas as pd
     import time
     df = pd.DataFrame(data, columns=['ts','turnover','close','high','low','open','vol','wc'])
     df['close'] = df['close'].astype(float)
     today = time.strftime("%Y-%m-%d", time.localtime())
-    midnight = int(time.mktime(time.strptime(today, "%Y-%m-%d")))*1000
+    midnight = int(time.mktime(time.strptime(today, "%Y-%m-%d")))
     day_open = None
     for k in data:
         if int(k[0]) >= midnight:

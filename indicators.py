@@ -37,16 +37,19 @@ def get_indicator(pair, interval):
         df[col] = df[col].astype(float)
     mid, upper, lower = calc_boll(df['close'])
     rsi = calc_rsi(df['close'])
-    # 算当天0点涨幅
+    # 算当天0点涨幅（GATE K线ts是秒级）
     today = time.strftime("%Y-%m-%d", time.localtime())
-    midnight = int(time.mktime(time.strptime(today, "%Y-%m-%d")))*1000
+    midnight = int(time.mktime(time.strptime(today, "%Y-%m-%d")))
     day_open = None
     for k in data:
         if int(k[0]) >= midnight:
             day_open = float(k[5])
             break
-    now = df['close'].iloc[-1]
-    day_chg = (now - day_open)/day_open*100 if day_open else 0
+    if not day_open:
+        day_chg = 0
+    else:
+        now = df['close'].iloc[-1]
+        day_chg = (now - day_open)/day_open*100
     # 趋势判断：收盘价在MA20上方
     ma20 = df['close'].rolling(20).mean().iloc[-1]
     trend_up = now > ma20
