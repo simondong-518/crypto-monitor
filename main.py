@@ -109,6 +109,7 @@ def monitor_once():
             trend_emoji = "🟢" if ind_s['trend_up'] else "🔴"
             trend_judge = "大趋势向上" if ind_s['trend_up'] else "大趋势向下"
             lines.append(f"| 趋势 | {trend_emoji} {'上涨' if ind_s['trend_up'] else '下跌'}(MA20) | {trend_judge} |")
+            space = (ind_s['boll_u'] - ind_s['close'])/ind_s['close']*100
             lines.append(f"| 支撑/压力 | 支撑{ind_s['boll_l']:.4f} / 压力{ind_s['boll_u']:.4f} | 离压力{space:.1f}% |")
             rsi_judge = []
             if ind_s['rsi']<30: rsi_judge.append("15m超卖")
