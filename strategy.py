@@ -55,14 +55,22 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     if two_lower and close <= ind_s['boll_l']*1.01:
         sell -= 2
     # RSI规则（双周期共振）
+    # 上涨途中不随便喊卖：只有连续2根长上影才加RSI卖分
+    row1 = df.iloc[-1]
+    row2 = df.iloc[-2]
+    body1 = abs(row1['close'] - row1['open'])
+    upper1 = row1['high'] - max(row1['open'], row1['close'])
+    body2 = abs(row2['close'] - row2['open'])
+    upper2 = row2['high'] - max(row2['open'], row2['close'])
+    two_upper = upper1 > body1*1.5 and upper2 > body2*1.5
     # 15m RSI
     if ind_s['rsi'] <30: buy +=1
-    elif ind_s['rsi']>80: sell +=1.5
-    elif ind_s['rsi']>70: sell +=1
+    elif ind_s['rsi']>80 and two_upper: sell +=1.5
+    elif ind_s['rsi']>70 and two_upper: sell +=1
     # 1h RSI共振
     if ind_l['rsi'] <30: buy +=1
-    elif ind_l['rsi']>80: sell +=1.5
-    elif ind_l['rsi']>70: sell +=1
+    elif ind_l['rsi']>80 and two_upper: sell +=1.5
+    elif ind_l['rsi']>70 and two_upper: sell +=1
     # 资金规则
     if flow['net_inflow'] > 1000: buy +=1
     if flow['net_inflow'] < -1000: sell +=1
