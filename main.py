@@ -49,7 +49,11 @@ def monitor_once():
             # 生成提醒
             alerts = []
             threshold = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
-            if abs(ind_s['day_chg']) >= threshold:
+            # 涨跌幅提醒必须伴随成交量>1.5倍平均量
+            avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
+            cur_vol = ind_s['df']['vol'].iloc[-1]
+            vol_enough = cur_vol > avg_vol * 1.5
+            if abs(ind_s['day_chg']) >= threshold and vol_enough:
                 alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
             if reverse_alert:
                 alerts.append(reverse_alert)

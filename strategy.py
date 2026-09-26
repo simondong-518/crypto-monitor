@@ -39,10 +39,15 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
                 sell += 1.5
             else:
                 buy += 0.5
-    # RSI规则
+    # RSI规则（双周期共振）
+    # 15m RSI
     if ind_s['rsi'] <30: buy +=1
     elif ind_s['rsi']>80: sell +=1.5
     elif ind_s['rsi']>70: sell +=1
+    # 1h RSI共振
+    if ind_l['rsi'] <30: buy +=1
+    elif ind_l['rsi']>80: sell +=1.5
+    elif ind_l['rsi']>70: sell +=1
     # 资金规则
     if flow['net_inflow'] > 1000: buy +=1
     if flow['net_inflow'] < -1000: sell +=1
