@@ -61,12 +61,17 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
         sell -=1
     return buy, sell
 
-def get_signal(coin, b_score, s_score):
-    # 判断当前信号
+def get_signal(coin, b_score, s_score, ind_s, ind_l):
+    # 双周期共振才出信号：15m和1h方向一致
+    s_buy = ind_s['rsi'] < 45 and ind_s['close'] > ind_s['boll_m']*0.99
+    l_buy = ind_l['rsi'] < 45 and ind_l['close'] > ind_l['boll_m']*0.99
+    s_sell = ind_s['rsi'] > 55 and ind_s['close'] < ind_s['boll_m']*1.01
+    l_sell = ind_l['rsi'] > 55 and ind_l['close'] < ind_l['boll_m']*1.01
+    # 判断当前信号：必须双周期共振
     current = "观望"
-    if b_score >= BUY_SCORE_THRESHOLD:
+    if b_score >= BUY_SCORE_THRESHOLD and s_buy and l_buy:
         current = "买入"
-    if s_score >= SELL_SCORE_THRESHOLD:
+    if s_score >= SELL_SCORE_THRESHOLD and s_sell and l_sell:
         current = "卖出"
     # 信号反转提醒
     reverse_alert = None

@@ -72,7 +72,7 @@ def monitor_once():
             # 日线大趋势过滤：日线向下，买分减1.5
             if not daily_up:
                 b_score -= 1.5
-            current_signal, reverse_alert = get_signal(coin, b_score, s_score)
+            current_signal, reverse_alert = get_signal(coin, b_score, s_score, ind_s, ind_l)
             # 生成提醒
             alerts = []
             threshold = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
@@ -170,12 +170,19 @@ def monitor_once():
 if __name__ == "__main__":
     print(f"启动模块化监测系统 {VERSION} {VERSION_DATE}")
     last_backtest_ts = time.time()
+    last_day = datetime.now().day
     monitor_once()
     while True:
         try:
             now_ts = time.time()
             now_hour = datetime.now().hour
             now_min = datetime.now().minute
+            now_day = datetime.now().day
+            # 每天0点自动清空推送记录
+            if now_day != last_day:
+                pushed.clear()
+                save_pushed()
+                last_day = now_day
             check_events()
             monitor_once()
             if now_ts - last_backtest_ts > BACKTEST_INTERVAL:
