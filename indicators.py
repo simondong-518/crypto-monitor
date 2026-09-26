@@ -53,6 +53,8 @@ def get_indicator(pair, interval):
     # 趋势判断：收盘价在MA20上方
     ma20 = df['close'].rolling(20).mean().iloc[-1]
     trend_up = now > ma20
+    # 判断BOLL三轨是不是全部向上
+    boll_all_up = mid.iloc[-1] > mid.iloc[-3] and upper.iloc[-1] > upper.iloc[-3] and lower.iloc[-1] > lower.iloc[-3]
     # 算MACD
     ef = df['close'].ewm(span=12).mean()
     es = df['close'].ewm(span=26).mean()
@@ -78,6 +80,7 @@ def get_indicator(pair, interval):
         'rsi': rsi.iloc[-1],
         'day_chg': day_chg,
         'trend_up': trend_up,
+        'boll_all_up': boll_all_up,
         'macd_gold': macd_gold,
         'macd_dead': macd_dead,
         'kdj_j': kdj_j,
