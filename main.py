@@ -6,7 +6,9 @@ from config import *
 from api import get_kline, get_trades, get_ls, get_btc_chg, check_events
 from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
-from notifier import send_wx, beep
+from notifier import send_wx
+from news import get_latest_news
+pushed_news = set(), beep
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
 # 鍔犺浇鎺ㄩ€佽褰?
