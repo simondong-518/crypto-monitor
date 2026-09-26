@@ -92,9 +92,8 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     # 资金持续流出时，就算到下轨也不抄底：买分减1
     if flow['net_inflow'] < -1000 and close <= ind_s['boll_l']*1.01:
         buy -= 1
-    # BOLL收口降权
-    boll_width = (ind_s['boll_u'] - ind_s['boll_l']) / ind_s['boll_m']
-    if boll_width < 0.03:
+    # BOLL收口如果没突破，降权
+    if boll_width < 0.03 and close < ind_s['boll_u']*0.99:
         buy -=1
         sell -=1
     return buy, sell
