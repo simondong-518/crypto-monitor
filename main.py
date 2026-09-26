@@ -7,7 +7,7 @@ from api import get_kline, get_trades, get_ls, get_btc_chg, check_events
 from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
 from notifier import send_wx, beep
-from backtest import backtest, daily_backtest
+from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
 # 加载推送记录
 pushed_file = "pushed.json"
@@ -16,6 +16,9 @@ try:
         pushed = json.load(f)
 except:
     pushed = {}
+
+# 存最近一次回测结果
+last_backtest_result = ""
 
 def save_pushed():
     with open(pushed_file, "w") as f:
@@ -89,6 +92,7 @@ def monitor_once():
             trend_emoji = "🟢" if ind_s['trend_up'] else "🔴"
             trend_judge = "大趋势向上" if ind_s['trend_up'] else "大趋势向下"
             lines.append(f"| 趋势 | {trend_emoji} {'上涨' if ind_s['trend_up'] else '下跌'}(MA20) | {trend_judge} |")
+            lines.append(f"| 支撑/压力 | 支撑{ind_s['boll_l']:.4f} / 压力{ind_s['boll_u']:.4f} | 离压力{space:.1f}% |")
             rsi_judge = []
             if ind_s['rsi']<30: rsi_judge.append("15m超卖")
             elif ind_s['rsi']>70: rsi_judge.append("15m超买")
@@ -130,6 +134,9 @@ def monitor_once():
         alert_lines.append("")
         lines = lines[:3] + alert_lines + lines[3:]
     desp = "\n".join(lines)
+    # 加上最近4小时回测结果
+    if last_backtest_result:
+        desp += "\n\n| 最近4h回测 | 详情 | |\n|------|------|------|\n" + last_backtest_result
     print(desp)
     if alerts_all:
         title = f"📊 K线监测 - {datetime.now().strftime('%m-%d %H:%M')}"

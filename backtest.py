@@ -5,7 +5,9 @@ from notifier import send_wx
 from config import CURRENCY_PAIRS
 
 # 2026-09-26 回测模块：4小时回测，自动调参
+last_result = ""
 def backtest():
+    global last_result
     print("开始4小时回测")
     results = []
     for pair in CURRENCY_PAIRS:
@@ -47,6 +49,7 @@ def backtest():
                 results.append(f"  ⚠️ 胜率过低，建议自动调参RSI阈值+5")
     if results:
         desp = "## 4小时回测结果\n" + "\n".join(results)
+        last_result = "| 最近4h回测胜率 | " + " / ".join(results) + " |"
         send_wx("📊 策略回测", desp)
 
 def daily_backtest():
