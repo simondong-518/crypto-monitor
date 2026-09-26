@@ -37,6 +37,23 @@ def monitor_once():
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
         send_wx("⚠️ BTC暴跌避险", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
+    # 自定义到价提醒
+    for alert_pair, (take_profit, stop_loss) in PRICE_ALERT.items():
+        coin = alert_pair.replace("_USDT","")
+        try:
+            ind = get_indicator(alert_pair, "15m")
+            price = ind['close']
+            key_tp = f"{coin}_止盈价{take_profit}"
+            key_sl = f"{coin}_止损价{stop_loss}"
+            if price >= take_profit and pushed.get(key_tp, 0) < MAX_PUSH_PER_SIGNAL:
+                pushed[key_tp] = pushed.get(key_tp,0)+1
+                send_wx(f"✅ {coin}到止盈价！", f"现价{price}，到你设置的止盈价{take_profit}，可以卖出止盈了")
+                beep()
+            if price <= stop_loss and pushed.get(key_sl, 0) < MAX_PUSH_PER_SIGNAL:
+                pushed[key_sl] = pushed.get(key_sl,0)+1
+                send_wx(f"⚠️ {coin}到止损价！", f"现价{price}，到你设置的止损价{stop_loss}，注意风险")
+                beep()
+        except: pass
     alerts_all = []
     lines = ["# 📊 K线监测报告", f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for pair in CURRENCY_PAIRS:
@@ -111,13 +128,18 @@ def monitor_once():
             take_profit = ind_s['boll_u']
             daily_judge = "日线向上" if daily_up else "日线向下"
             if current_signal == "买入":
-                hold_advice = f"可以买入，轻仓，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
-                empty_advice = f"可以建仓，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
+                # 仓位建议：日线向上买3成，日线向下买1成
+                if daily_up:
+                    pos = "3成仓"
+                else:
+                    pos = "1成轻仓"
+                hold_advice = f"可以买入，{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
+                empty_advice = f"可以建仓，{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
             elif current_signal == "卖出":
-                hold_advice = "止盈/止损卖出"
+                hold_advice = "全部止盈/止损卖出"
                 empty_advice = "别买，等回调"
             else:
-                hold_advice = "持有观望"
+                hold_advice = "持有观望，不动"
                 empty_advice = "观望，等明确信号"
             lines.append("")
             lines.append(f"**结论**: {trend_judge}，资金{flow_judge}，{daily_judge}")

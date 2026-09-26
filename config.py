@@ -30,3 +30,12 @@ CHECK_INTERVAL = 60
 
 # 回测间隔（秒，默认4小时）
 BACKTEST_INTERVAL = 4 * 3600
+
+# 自定义到价提醒：格式 {"币名": [止盈价, 止损价]}
+PRICE_ALERT = {
+    "BSV_USDT": [22.0, 21.0],
+}
+
+# 手续费率（回测用）
+FEE_RATE = 0.001
+

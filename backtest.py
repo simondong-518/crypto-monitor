@@ -2,7 +2,7 @@ import pandas as pd
 from api import get_kline
 from indicators import calc_rsi
 from notifier import send_wx
-from config import CURRENCY_PAIRS
+from config import CURRENCY_PAIRS, FEE_RATE
 
 # 2026-09-26 回测模块：4小时回测，自动调参
 last_result = ""
@@ -37,11 +37,13 @@ def backtest():
             # 卖出信号
             if price >= boll_u*0.995 and rsi>70 and two_upper:
                 total +=1
-                if future_price < price: win +=1
+                profit = (price - future_price)/price - FEE_RATE*2
+                if profit > 0: win +=1
             # 买入信号
             if price <= boll_l*1.005 and rsi<30 and price>boll_m:
                 total +=1
-                if future_price > price: win +=1
+                profit = (future_price - price)/price - FEE_RATE*2
+                if profit > 0: win +=1
         if total>0:
             win_rate = win/total*100
             results.append(f"{coin}: 胜率{win_rate:.0f}% ({win}/{total})")
