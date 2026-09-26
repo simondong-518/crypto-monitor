@@ -20,14 +20,19 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     # BOLL规则
     if close <= ind_s['boll_l']*1.005:
         if ind_s['trend_up']:
-            buy += 1.5
+            # 上涨碰下轨：4h向上加1.5，4h向下加0.75
+            if ind_l['trend_up']:
+                buy += 1.5
+            else:
+                buy += 0.75
         else:
-            sell += 0.5
+            # 下跌碰下轨：不买不卖
+            pass
     if close >= ind_s['boll_u']*0.995:
         if not ind_s['trend_up']:
             sell += 1.5
         else:
-            # 连续上影才加卖分
+            # 上涨碰上轨：连续上影才加卖分
             row1 = df.iloc[-1]
             row2 = df.iloc[-2]
             body1 = abs(row1['close'] - row1['open'])
@@ -39,6 +44,16 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
                 sell += 1.5
             else:
                 buy += 0.5
+    # 连续2根长下影+跌到下轨：卖分减2，不割在支撑位
+    row1 = df.iloc[-1]
+    row2 = df.iloc[-2]
+    body1 = abs(row1['close'] - row1['open'])
+    lower1 = min(row1['open'], row1['close']) - row1['low']
+    body2 = abs(row2['close'] - row2['open'])
+    lower2 = min(row2['open'], row2['close']) - row2['low']
+    two_lower = lower1 > body1*1.5 and lower2 > body2*1.5
+    if two_lower and close <= ind_s['boll_l']*1.01:
+        sell -= 2
     # RSI规则（双周期共振）
     # 15m RSI
     if ind_s['rsi'] <30: buy +=1
