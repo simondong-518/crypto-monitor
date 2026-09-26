@@ -167,7 +167,7 @@ def monitor_once():
         beep()
 
 if __name__ == "__main__":
-    print("启动模块化监测系统")
+    print(f"启动模块化监测系统 {VERSION} {VERSION_DATE}")
     last_backtest_ts = time.time()
     monitor_once()
     while True:
