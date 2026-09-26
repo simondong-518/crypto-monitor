@@ -60,3 +60,12 @@ def get_indicator(pair, interval):
         'trend_up': trend_up,
         'df': df
     }
+
+# 2026-09-26 加日线大趋势判断
+def get_daily_trend(pair):
+    data = get_kline(pair, "1d", 100)
+    df = pd.DataFrame(data, columns=['ts','turnover','close','high','low','open','vol','wc'])
+    df['close'] = df['close'].astype(float)
+    ma20 = df['close'].rolling(20).mean().iloc[-1]
+    close = df['close'].iloc[-1]
+    return close > ma20  # True=日线大趋势向上

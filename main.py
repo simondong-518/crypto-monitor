@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from config import *
 from api import get_kline, get_trades, get_ls, get_btc_chg, check_events
-from indicators import get_indicator
+from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
 from notifier import send_wx, beep
 from backtest import backtest, daily_backtest
@@ -31,6 +31,9 @@ def analyze_trades(trades):
 
 def monitor_once():
     btc_chg = get_btc_chg()
+    # BTC暴跌>3%避险提醒
+    if btc_chg < -3:
+        send_wx("⚠️ BTC暴跌避险", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
     alerts_all = []
     lines = ["# 📊 K线监测报告", f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for pair in CURRENCY_PAIRS:
@@ -38,6 +41,7 @@ def monitor_once():
         try:
             ind_s = get_indicator(pair, "15m")
             ind_l = get_indicator(pair, "1h")
+            daily_up = get_daily_trend(pair)
             trades = get_trades(pair)
             flow = analyze_trades(trades)
             ls = get_ls(pair)
@@ -45,6 +49,9 @@ def monitor_once():
             top_ratio = float(lsd['top_lsr_account'])
             # 打分
             b_score, s_score = calc_score(ind_s, ind_l, flow, top_ratio, ind_s['df'])
+            # 日线大趋势过滤：日线向下，买分减1.5
+            if not daily_up:
+                b_score -= 1.5
             current_signal, reverse_alert = get_signal(coin, b_score, s_score)
             # 生成提醒
             alerts = []
@@ -96,9 +103,12 @@ def monitor_once():
             s_emoji = "🟢" if current_signal=="买入" else ("🔴" if current_signal=="卖出" else "⚪")
             lines.append(f"| 15m信号 | {s_emoji} {current_signal} | 买{b_score:.1f}/卖{s_score:.1f} |")
             # 建议
+            stop_loss = ind_s['boll_l']
+            take_profit = ind_s['boll_u']
+            daily_judge = "日线向上" if daily_up else "日线向下"
             if current_signal == "买入":
-                hold_advice = "可以买入，轻仓"
-                empty_advice = "可以建仓"
+                hold_advice = f"可以买入，轻仓，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
+                empty_advice = f"可以建仓，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
             elif current_signal == "卖出":
                 hold_advice = "止盈/止损卖出"
                 empty_advice = "别买，等回调"
@@ -106,7 +116,7 @@ def monitor_once():
                 hold_advice = "持有观望"
                 empty_advice = "观望，等明确信号"
             lines.append("")
-            lines.append(f"**结论**: {trend_judge}，资金{flow_judge}")
+            lines.append(f"**结论**: {trend_judge}，资金{flow_judge}，{daily_judge}")
             lines.append(f"**持仓建议**: {hold_advice}")
             lines.append(f"**空仓建议**: {empty_advice}")
             lines.append("")
