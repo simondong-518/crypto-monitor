@@ -39,7 +39,7 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
             upper1 = row1['high'] - max(row1['open'], row1['close'])
             body2 = abs(row2['close'] - row2['open'])
             upper2 = row2['high'] - max(row2['open'], row2['close'])
-            two_upper = upper1 > body1*1.5 and upper2 > body2*1.5
+            two_upper = upper1 > body1*2 and upper2 > body2*2
             if two_upper:
                 sell += 1.5
             else:
@@ -51,7 +51,7 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     lower1 = min(row1['open'], row1['close']) - row1['low']
     body2 = abs(row2['close'] - row2['open'])
     lower2 = min(row2['open'], row2['close']) - row2['low']
-    two_lower = lower1 > body1*1.5 and lower2 > body2*1.5
+    two_lower = lower1 > body1*2 and lower2 > body2*2
     if two_lower and close <= ind_s['boll_l']*1.01:
         sell -= 2
     # RSI规则（双周期共振）
@@ -82,9 +82,9 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     if ind_s['kdj_j'] > 100: sell +=1
     if ind_s['k_gold']: buy +=0.5
     if ind_s['k_dead']: sell +=0.5
-    # 大户多空比：阈值改成>1.1买，<0.9卖
-    if top_ratio < 0.9: sell +=1
-    if top_ratio > 1.1: buy +=1
+    # 大户多空比：>1加买，<1加卖
+    if top_ratio < 1: sell +=1
+    if top_ratio > 1: buy +=1
     # 资金持续流出时，就算到下轨也不抄底：买分减1
     if flow['net_inflow'] < -1000 and close <= ind_s['boll_l']*1.01:
         buy -= 1
