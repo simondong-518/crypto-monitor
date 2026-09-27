@@ -85,13 +85,13 @@ def monitor_once():
             # 娑ㄨ穼骞呮彁閱掑繀椤讳即闅忔垚浜ら噺>1.5鍊嶅钩鍧囬噺
             avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
             cur_vol = ind_s['df']['vol'].iloc[-1]
-            vol_enough = cur_vol > avg_vol * 1.5
+            vol_enough = cur_vol > avg_vol * 1.2
             if abs(ind_s['day_chg']) >= 5:
-                alerts.append(f"浠婃棩{'澶ф定' if ind_s['day_chg']>0 else '澶ц穼'}{ind_s['day_chg']:.1f}%")
+                alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
                 if ind_s['trend_up'] and ind_s['day_chg']>0:
                     alerts.append("锛岃秼鍔垮惎鍔紝鎷夸綇")
             elif abs(ind_s['day_chg']) >= threshold and vol_enough:
-                alerts.append(f"浠婃棩{'澶ф定' if ind_s['day_chg']>0 else '澶ц穼'}{ind_s['day_chg']:.1f}%")
+                alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
             ma20 = ind_s['df']['close'].rolling(20).mean().iloc[-1]
             prev_close = ind_s['df']['close'].iloc[-2]
             if prev_close > ma20 and ind_s['close'] < ma20 and ind_s['trend_up']:

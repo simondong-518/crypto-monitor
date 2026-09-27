@@ -18,8 +18,7 @@ SENDKEY2 = "SCT427098TfTBMz8lASeCdUCtqzwAmFACc"
 
 # 涨跌幅提醒阈值
 CHG_THRESHOLD = {
-    "CYS": 4.0,
-    "default": 3.0
+    "default": 2.0
 }
 
 # 信号打分阈值
