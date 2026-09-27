@@ -3,8 +3,8 @@
 # ==============================================
 
 # 系统版本号
-VERSION = "v2.1.0"
-VERSION_DATE = "2026-09-26"
+VERSION = "v2.2.1"
+VERSION_DATE = "2026-09-28"
 
 # GATE API地址
 BASE = "https://api.gateio.ws/api/v4"
