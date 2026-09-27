@@ -115,36 +115,36 @@ def monitor_once():
                     pushed[key] = pushed.get(key, 0) + 1
                     alerts_all.append((coin, alerts))
             # 鐢熸垚鎶ュ憡琛?
-            sync = "鍚屾涓婃定" if ind_s['day_chg']*btc_chg>0 else "鑳岀"
+            sync = "同步上涨" if ind_s['day_chg']*btc_chg>0 else "背离"
             lines.append(f"## {coin}/USDT ${ind_s['close']} ({ind_s['day_chg']:+.2f}%, {sync})")
             lines.append("")
-            lines.append("| 鎸囨爣 | 鏁板€?| 鍒ゆ柇 |")
+            lines.append("| 指标 | 数值 | 判断 |")
             lines.append("|------|------|------|")
-            trend_emoji = "馃煝" if ind_s['trend_up'] else "馃敶"
+            trend_emoji = "🟢" if ind_s['trend_up'] else "🔴"
             trend_judge = "大趋势向上" if ind_s['trend_up'] else "大趋势向下"
             lines.append(f"| 瓒嬪娍 | {trend_emoji} {'涓婃定' if ind_s['trend_up'] else '涓嬭穼'}(MA20) | {trend_judge} |")
             space = (ind_s['boll_u'] - ind_s['close'])/ind_s['close']*100
             lines.append(f"| 支撑/压力 | 支撑{ind_s['boll_l']:.4f} / 压力{ind_s['boll_u']:.4f} | 离压力{space:.1f}% |")
             rsi_judge = []
-            if ind_s['rsi']<30: rsi_judge.append("15m瓒呭崠")
-            elif ind_s['rsi']>70: rsi_judge.append("15m瓒呬拱")
+            if ind_s['rsi']<30: rsi_judge.append("15m超卖")
+            elif ind_s['rsi']>70: rsi_judge.append("15m超买")
             else: rsi_judge.append("15m中性")
-            if ind_l['rsi']<30: rsi_judge.append("1h瓒呭崠")
-            elif ind_l['rsi']>70: rsi_judge.append("1h瓒呬拱")
+            if ind_l['rsi']<30: rsi_judge.append("1h超卖")
+            elif ind_l['rsi']>70: rsi_judge.append("1h超买")
             else: rsi_judge.append("1h中性")
             lines.append(f"| RSI | 15m {ind_s['rsi']:.1f} / 1h {ind_l['rsi']:.1f} | {', '.join(rsi_judge)} |")
             # 1h趋势
             l_space = (ind_l['boll_u'] - ind_l['close'])/ind_l['close']*100
             lines.append(f"| 1h趋势 | BOLL上轨{ind_l['boll_u']:.4f} | 离上轨{l_space:.1f}%，{'上涨' if ind_l['trend_up'] else '下跌'} |")
-            flow_judge = "鏄庢樉娴佸叆" if flow['net_inflow']>1000 else ("鏄庢樉娴佸嚭" if flow['net_inflow']<-1000 else "骞宠　")
-            lines.append(f"| 璧勯噾娴佸悜 | ${flow['net_inflow']:.0f} | {flow_judge} |")
-            lines.append(f"| 澶ф埛澶氱┖姣?| {top_ratio:.2f} | {'鍋忕┖' if top_ratio<0.7 else '鍋忓' if top_ratio>1.3 else '骞宠　'} |")
+            flow_judge = "明显流入" if flow['net_inflow']>1000 else ("明显流出" if flow['net_inflow']<-1000 else "平衡")
+            lines.append(f"| 资金流向 | ${flow['net_inflow']:.0f} | {flow_judge} |")
+            lines.append(f"| 大户多空比 | {top_ratio:.2f} | {'偏空' if top_ratio<0.7 else '偏多' if top_ratio>1.3 else '平衡'} |")
             s_emoji = "🟢" if current_signal=="买入" else ("🔴" if current_signal=="卖出" else "⚪")
             lines.append(f"| 15m信号 | {s_emoji} {current_signal} | 买{b_score:.1f}/卖{s_score:.1f} |")
             # 寤鸿
             stop_loss = ind_s['boll_l']
             take_profit = ind_s['boll_u']
-            daily_judge = "鏃ョ嚎鍚戜笂" if daily_up else "鏃ョ嚎鍚戜笅"
+            daily_judge = "日线向上" if daily_up else "日线向下"
             if current_signal == "涔板叆":
                 # 浠撲綅寤鸿锛氭棩绾垮悜涓婁拱3鎴愶紝鏃ョ嚎鍚戜笅涔?鎴?
                 if daily_up:
