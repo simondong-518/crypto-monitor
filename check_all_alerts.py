@@ -26,15 +26,19 @@ for pair in CURRENCY_PAIRS:
         b, s = calc_score(ind_s, ind_l, flow, ls_ratio, ind_s['df'])
         if not daily_up:
             b -= 1.5
+        # 4h趋势过滤
+        ind_4h = get_indicator(pair, "4h")
+        if not ind_4h['trend_up']:
+            b -= 1
         avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
         cur_vol = ind_s['df']['vol'].iloc[-1]
-        vol_enough = cur_vol > avg_vol*1.5
+        vol_enough = cur_vol > avg_vol*1.2
         chg_enough = abs(ind_s['day_chg']) >= thr
         buy_alert = b >= BUY_SCORE_THRESHOLD
         sell_alert = s >= SELL_SCORE_THRESHOLD
         print(f"\n【{coin}】现价{ind_s['close']:.4f}")
         print(f"  今日涨幅{ind_s['day_chg']:+.2f}% (阈值{thr}%): {'✅够' if chg_enough else '❌不够'}")
-        print(f"  成交量: {'✅够(>1.5倍)' if vol_enough else '❌不够(缩量)'}")
+        print(f"  成交量: {'✅够(>1.2倍)' if vol_enough else '❌不够(缩量)'}")
         print(f"  买分{b:.1f}/卖分{s:.1f} (阈值3.5): {'✅买' if buy_alert else ''} {'✅卖' if sell_alert else ''} {'❌无信号' if not buy_alert and not sell_alert else ''}")
     except Exception as e:
         print(f"\n【{coin}】出错: {e}")
