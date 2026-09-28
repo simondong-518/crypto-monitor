@@ -36,7 +36,7 @@ def analyze_trades(trades):
 
 def monitor_once():
     btc_chg = get_btc_chg()
-    # BTC鏆磋穼>3%閬块櫓鎻愰啋
+    # BTC暴跌>3%避险提醒
     if btc_chg < -3:
         send_wx("⚠️ BTC暴跌预警", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
     # 鑷畾涔夊埌浠锋彁閱?
@@ -71,7 +71,7 @@ def monitor_once():
             top_ratio = float(lsd['top_lsr_account'])
             # 鎵撳垎
             b_score, s_score = calc_score(ind_s, ind_l, flow, top_ratio, ind_s['df'])
-            # 鏃ョ嚎澶ц秼鍔胯繃婊わ細鏃ョ嚎鍚戜笅锛屼拱鍒嗗噺1.5
+            # 日线大趋势过滤：日线向下，买分减1.5
             if not daily_up:
                 b_score -= 1.5
             # 4灏忔椂澶ц秼鍔胯繃婊?
@@ -82,7 +82,7 @@ def monitor_once():
             # 鐢熸垚鎻愰啋
             alerts = []
             threshold = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
-            # 娑ㄨ穼骞呮彁閱掑繀椤讳即闅忔垚浜ら噺>1.5鍊嶅钩鍧囬噺
+            # 涨跌幅提醒必须伴随成交量>1.2倍平均量
             avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
             cur_vol = ind_s['df']['vol'].iloc[-1]
             vol_enough = cur_vol > avg_vol * 1.2
@@ -155,7 +155,7 @@ def monitor_once():
                 empty_advice = f"可以建仓{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
             elif current_signal == "鍗栧嚭":
                 hold_advice = "鍏ㄩ儴姝㈢泩/姝㈡崯鍗栧嚭"
-                empty_advice = "鍒拱锛岀瓑鍥炶皟"
+                empty_advice = "别买，等回调"
             else:
                 hold_advice = "持有观望，不动"
                 empty_advice = "瑙傛湜锛岀瓑鏄庣‘淇″彿"
@@ -168,24 +168,24 @@ def monitor_once():
             print(f"{coin}鍑洪敊: {e}")
             continue
     if alerts_all:
-        alert_lines = ["", f"## 馃毃 鏂颁俊鍙?({len(alerts_all)}涓竵)", ""]
+        alert_lines = ["", f"## 🔔 新信号({len(alerts_all)}个币))", ""]
         for c, a in alerts_all:
             alert_lines.append(f"- **{c}**: {', '.join(a)}")
         alert_lines.append("")
         lines = lines[:3] + alert_lines + lines[3:]
     desp = "\n".join(lines)
-    # 鍔犱笂鏈€杩?灏忔椂鍥炴祴缁撴灉
+    # 加上最近4小时回测结果
     if last_backtest_result:
-        desp += "\n\n| 鏈€杩?h鍥炴祴 | 璇︽儏 | |\n|------|------|------|\n" + last_backtest_result
+        desp += "\n\n| 最近4h回测 | 详情 | |\n|------|------|------|\n" + last_backtest_result
     print(desp)
     if alerts_all:
-        title = f"馃搳 K绾跨洃娴?- {datetime.now().strftime('%m-%d %H:%M')}"
+        title = f"📈 K线监测- {datetime.now().strftime('%m-%d %H:%M')}"
         send_wx(title, desp)
         save_pushed()
         beep()
 
 if __name__ == "__main__":
-    print(f"鍚姩妯″潡鍖栫洃娴嬬郴缁?{VERSION} {VERSION_DATE}")
+    print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")
     last_backtest_ts = time.time()
     last_day = datetime.now().day
     monitor_once()
