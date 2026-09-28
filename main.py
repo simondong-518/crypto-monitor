@@ -158,7 +158,7 @@ def monitor_once():
                 empty_advice = "别买，等回调"
             else:
                 hold_advice = "持有观望，不动"
-                empty_advice = "瑙傛湜锛岀瓑鏄庣‘淇″彿"
+                empty_advice = "观望，等明确信号"
             lines.append("")
             lines.append(f"**结论**: {trend_judge}，资金{flow_judge}，{daily_judge}")
             lines.append(f"**持仓建议**: {hold_advice}")
