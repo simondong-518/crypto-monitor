@@ -1,0 +1,29 @@
+# 统一编码与换行 —— 防止再次出现 UTF-8 → GBK 二次编码乱码
+# 背景：v2.2.1 时期 main.py 被以「GBK 读入 + UTF-8 with BOM 写出」的方式重写，
+#       导致 64 行中文变成乱码，并在此后三次「修复乱码」提交中都未清干净。
+#       详见 M:\hermes\workspace\dev\crypto-monitor-analysis\WORKLIST-V2-2026-09-29.md 第 2.2 节
+#
+# 关键一条：charset 必须是 utf-8，绝不能用 utf-8-bom / utf-16 / gb2312。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{md,json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.csv]
+charset = utf-8-bom
+# CSV 用 BOM 是为了让 Excel 正确识别中文，这是唯一允许带 BOM 的类型
+
+[*.bat]
+end_of_line = crlf
