@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>行情监控面板</title>
+<script>
+/* 主题：在渲染前决定，避免闪一下错误的颜色。CHOICE=system|light|dark */
+(function(){try{
+  var c=localStorage.getItem('cm-theme')||'system';
+  var light=(c==='light')||(c==='system'&&window.matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.dataset.theme=light?'light':'dark';
+}catch(e){}})();
+</script>
+<style>
+:root{
+  --bg:#0e1116; --fg:#c9d1d9; --panel:#161b24; --head:#1b212b; --line:#2a2f3a; --hair:#21262d;
+  --dim:#8b949e; --up:#3fb950; --down:#f85149; --warn:#f6c177; --accent:#1f6feb; --code:#f6c177;
+}
+html[data-theme=light]{
+  --bg:#f6f8fa; --fg:#1f2328; --panel:#ffffff; --head:#eef1f4; --line:#d0d7de; --hair:#eaeef2;
+  --dim:#59636e; --up:#1a7f37; --down:#cf222e; --warn:#9a6700; --accent:#0969da; --code:#953800;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+  font:14px/1.6 "Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-variant-numeric:tabular-nums;
+  transition:background-color .18s ease,color .18s ease;
+  -webkit-text-size-adjust:100%}
+.wrap{max-width:1100px;margin:0 auto;padding:10px 10px 30px}
+header.top{position:sticky;top:0;z-index:9;background:var(--bg);padding:8px 0 6px;
+  border-bottom:1px solid var(--hair);margin-bottom:10px}
+h1{font-size:16px;margin:0 0 2px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+h1 .spark{font-size:15px}
+.sub{font-size:11.5px;color:var(--dim)}
+.theme{display:flex;gap:4px;margin-top:7px;flex-wrap:wrap;align-items:center}
+.themebtn{background:var(--panel);color:var(--dim);border:1px solid var(--line);border-radius:999px;
+  padding:3px 11px;font-size:11.5px;cursor:pointer;transition:all .15s ease}
+.themebtn:hover{color:var(--fg);border-color:var(--accent)}
+.themebtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.ghost{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:999px;
+  padding:3px 11px;font-size:11.5px;cursor:pointer;transition:all .15s ease}
+.ghost:hover{border-color:var(--accent);color:var(--accent)}
+.banner{display:none;margin:0 0 10px;padding:9px 12px;border-radius:8px;font-weight:600;
+  cursor:pointer;text-align:center;background:var(--accent);color:#fff;font-size:13px;
+  animation:pop .25s ease}
+@keyframes pop{from{transform:translateY(-4px);opacity:0}to{transform:none;opacity:1}}
+.banner.off{background:var(--down)}
+.note{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;
+  color:var(--dim);text-align:center}
+details{border:1px solid var(--line);border-radius:8px;background:var(--panel);margin-bottom:10px;overflow:hidden}
+details>summary{cursor:pointer;padding:9px 12px;font-weight:600;list-style:none;
+  background:var(--head);user-select:none;transition:background .15s ease;font-size:13.5px}
+details>summary:hover{background:var(--hair)}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"\25B8 ";color:var(--dim);white-space:nowrap}
+details[open]>summary::before{content:"\25BE "}
+details:not([open])>summary::after{content:"（点击展开）";color:var(--dim);font-weight:400;font-size:11px;white-space:nowrap}
+details[open]>summary::after{content:"（点击收起）";color:var(--dim);font-weight:400;font-size:11px;white-space:nowrap}
+details>div.inner{padding:10px 12px 12px}
+details.coin.buy{border-left:3px solid var(--up)}
+details.coin.sell{border-left:3px solid var(--down)}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px 14px;font-size:12.5px}
+.stat>div{border-bottom:1px dashed var(--hair);padding:3px 0}
+.stat .k{color:var(--dim);font-size:11.5px;margin-right:4px}
+.sec{font-size:11.5px;color:var(--dim);margin:12px 0 6px;letter-spacing:.3px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;border:1px solid var(--line);
+  font-size:11.5px;margin:0 5px 5px 0;white-space:nowrap;background:var(--bg)}
+.pill.ok{color:var(--up);border-color:var(--up)}
+.pill.dim{color:var(--dim)}
+.tag{font-size:11px;font-weight:400;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.tag.fire{color:var(--down);border-color:var(--down)}
+.tag.cool{color:var(--warn);border-color:var(--warn)}
+.ico{font-size:17px;line-height:1}
+/* 注意：只作用于走势图本身（svg.spark）。早前写成 .spark 时，<h1> 里那个
+   同名的 emoji span 也被套上了 100%×58px 的边框，变成一个空方框（实图抓到）。*/
+.ov{margin-bottom:10px}
+table.ovt{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.ovt th,.ovt td{padding:5px 8px;font-size:12.5px;white-space:nowrap}
+.ovt tr.ovr td:first-child{font-weight:700}
+.ovt .sig-u{color:var(--up);font-weight:700}
+.ovt .sig-d{color:var(--down);font-weight:700}
+svg.spark{width:100%;height:58px;display:block;margin:2px 0 8px;background:var(--bg);
+  border:1px solid var(--hair);border-radius:6px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--hair);font-size:12.5px;vertical-align:top}
+th{color:var(--dim);font-weight:500;font-size:11.5px}
+table tr:last-child td{border-bottom:0}
+table td:first-child{color:var(--dim);white-space:nowrap;width:118px}
+table td:nth-child(2){width:44%;font-weight:600}
+table td.src{color:var(--dim);font-size:11.5px;font-weight:400}
+code{background:var(--bg);padding:1px 5px;border-radius:4px;color:var(--code);font-size:11.5px}
+.up{color:var(--up)}.down{color:var(--down)}.dim{color:var(--dim)}.warn{color:var(--warn)}
+ul.alerts{list-style:none;margin:6px 0 0;padding:0}
+ul.alerts li{border-left:3px solid var(--line);background:var(--bg);border-radius:6px;
+  padding:7px 10px;margin-bottom:7px;font-size:12.5px}
+ul.alerts li.fire{border-left-color:var(--down)}
+ul.alerts li.cool{border-left-color:var(--warn)}
+ul.alerts .tm{color:var(--dim);font-size:11.5px;margin-right:5px}
+ul.alerts .why{color:var(--dim);font-size:11.5px;margin-left:6px}
+ul.alerts .body{color:var(--fg);margin-top:3px;white-space:pre-wrap;word-break:break-word}
+ul.errs{margin:4px 0 0;padding-left:18px;color:var(--warn);font-size:12px}
+.hint{font-size:11.5px;color:var(--dim);line-height:1.7}
+a{color:var(--accent)}
+@media(max-width:560px){
+  .wrap{padding:8px 8px 24px}
+  table td:first-child{width:92px;font-size:11.5px}
+  table td:nth-child(2){width:40%}
+  .stat{grid-template-columns:1fr;font-size:12px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <h1><span class="ico">📡</span>行情监控面板 <span class="dim" style="font-size:11.5px;font-weight:400">[[VERSION]]</span></h1>
+  <div class="sub">指标口径：<b>最后一根已收盘 K 线</b>；价格与涨跌幅是实时快照 —— 各卡表格第三列写明每个数字的来路。</div>
+  <div class="theme">
+    <span class="dim" style="font-size:11.5px">主题</span>
+    <button class="themebtn" data-t="system">跟随系统</button>
+    <button class="themebtn" data-t="light">浅色</button>
+    <button class="themebtn" data-t="dark">深色</button>
+    <span style="flex:1"></span>
+    <button class="ghost" onclick="location.reload()">立即刷新</button>
+    <button class="ghost" onclick="allDet(true)">全部展开</button>
+    <button class="ghost" onclick="allDet(false)">全部收起</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" onclick="location.reload()"></div>
+
+<div class="ov">
+  <div class="sec">总览（[[COINN]] 个币 · 现价实时 · 点下面任一卡片看逐项指标）</div>
+  <table class="ovt">
+    <tr><th>币</th><th>现价</th><th>涨跌</th><th>信号</th><th>量能</th></tr>
+[[OVERVIEW]]
+  </table>
+</div>
+
+<details open>
+  <summary>监控状态（第 <span id="rn">—</span> 轮 · 每 [[REFRESH]] 秒检查一次数据更新）</summary>
+  <div class="inner">[[STATUS]]</div>
+</details>
+
+<details open>
+  <summary>指标与信号（[[COINN]] 个币 · 点开看逐项数值与口径）</summary>
+  <div class="inner">
+[[COINS]]
+  </div>
+</details>
+
+<details open>
+  <summary>报警（本轮 [[ALERTN]] 条 · 与 main.py 同一处判定）</summary>
+  <div class="inner">[[ALERTS]]</div>
+</details>
+
+<details>
+  <summary>指标口径与数据来源（哪些是本地算的、哪些是接口直返的）</summary>
+  <div class="inner">
+    <div class="hint">
+      <b>本地算（用 Gate 的 K 线自己算）</b>：MA20、BOLL(20,±2σ)、RSI(14，简单均值法)、量能倍数、
+      资金流向（近 100 笔主动买 − 主动卖）、形态（上下影线）、买分/卖分/15m 信号。<br>
+      <b>接口直返（Gate 直接给的）</b>：现价、当日涨跌幅、24h 高低、
+      <code>contract_stats.top_lsr_account</code>（账户数多空比）、<code>top_lsr_size</code>（大户持仓量多空比）。<br>
+      <b>打分口径</b>：大户多空比按<b>该币自身的滚动分位数</b>打分（不是绝对值阈值）；
+      分位需要先攒够样本，预热期内该项<b>不加分</b>，表格里会显示"预热中 n/60"。<br>
+      <b>为什么指标用已收盘 K 线</b>：正在形成的那根 K 线，量能和影线每秒钟都在变，
+      拿它算指标会得出"永远达不到门槛"的假信号；已收盘的那根才是定下来的事实。
+      现价和涨跌幅仍用实时值 —— 它们在表格里单独标了"实时"。
+    </div>
+  </div>
+</details>
+
+<details>
+  <summary>怎么用这个页面 / 面板会不会影响监控</summary>
+  <div class="inner">
+    <div class="hint">
+      <b>手机上打开</b>：和监控进程在同一局域网，浏览器访问 <code>http://&lt;这台电脑的IP&gt;:端口/</code>；
+      首次监听 Windows 防火墙会弹窗，勾选"专用网络"允许即可。<br>
+      <b>面板是只读的</b>：它不写配置、不改监控列表、不触发推送、不参与判定。
+      判定与报警全部由 <code>evaluate.py</code> / <code>main.py</code> 决定 ——
+      <b>关掉浏览器不影响监控</b>，面板进程崩了监控也照跑（启动失败只打一行警告）。<br>
+      <b>数据新鲜度</b>：页面是服务端渲染的静态快照，JS 每 [[REFRESH]] 秒问一次
+      <code>/api/state</code>；有新数据时才提示你刷新（<b>故意不自动刷新</b>，
+      免得看一半的滚动位置被顶掉）。手机放兜里（页面不可见）时它才会自动悄悄刷新。<br>
+      <b>脚本取数</b>：<code>/api/state</code> 是纯 JSON，可以直接给别的程序吃。<br>
+      <b>页面里不含任何密钥</b>：通道那一栏只有名字与启用状态，key/webhook 一律不出网。
+    </div>
+  </div>
+</details>
+</div>
+
+<script>
+var SEQ=[[SEQ]], ALERTS0=[[ALERTN]], POLL=[[REFRESH]]*1000, LAST_OK=Date.now()/1000, FAILS=0;
+
+/* ── 主题 ── */
+var CHOICE='system';
+try{CHOICE=localStorage.getItem('cm-theme')||'system';}catch(e){}
+var mq=window.matchMedia('(prefers-color-scheme: light)');
+function applyTheme(){
+  var t=(CHOICE==='system')?(mq.matches?'light':'dark'):CHOICE;
+  document.documentElement.dataset.theme=t;
+  document.querySelectorAll('.themebtn').forEach(function(b){b.classList.toggle('on',b.dataset.t===CHOICE);});
+}
+document.querySelectorAll('.themebtn').forEach(function(b){
+  b.onclick=function(){CHOICE=b.dataset.t;try{localStorage.setItem('cm-theme',CHOICE);}catch(e){}applyTheme();};
+});
+mq.addEventListener('change',function(){if(CHOICE==='system')applyTheme();});
+applyTheme();
+
+/* ── 折叠 ── */
+function allDet(v){document.querySelectorAll('details').forEach(function(d){d.open=v;});}
+
+/* ── 下一轮倒计时 ── */
+function tick(){
+  var el=document.getElementById('eta'); if(!el) return;
+  var t=window.NEXT_TS||0;
+  if(!t){el.textContent='—';return;}
+  var d=Math.round(t-Date.now()/1000);
+  el.textContent=(d>0)?(d+' 秒后'):'即将开始';
+}
+
+/* ── 轮询：只提示，不打断（不可见时才自动刷） ── */
+function banner(msg,off){
+  var b=document.getElementById('banner');
+  b.textContent=msg; b.className='banner'+(off?' off':''); b.style.display='block';
+}
+function hideBanner(){document.getElementById('banner').style.display='none';}
+function poll(){
+  fetch('/api/state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+    LAST_OK=Date.now()/1000; FAILS=0; hideBanner();
+    document.getElementById('rn').textContent=s.round||0;
+    if(s.seq&&s.seq!==SEQ){
+      var n=(s.alerts||[]).length;
+      if(document.hidden){location.reload();return;}
+      banner(n>ALERTS0?('⚠ 有 '+(n-ALERTS0)+' 条新报警，第 '+(s.round||0)+' 轮已完成 —— 点这里刷新')
+                      :('第 '+(s.round||0)+' 轮数据已更新 —— 点这里刷新'));
+    }
+  }).catch(function(){FAILS++; var ago=Math.round(Date.now()/1000-LAST_OK);
+    banner('🔌 连不上监控进程（已 '+ago+' 秒没收到数据）—— 点这里重试；若一直这样，去电脑上看 logs\\monitor.log',true);});
+}
+
+document.getElementById('rn').textContent='[[ROUND]]';
+tick(); setInterval(tick,1000); setInterval(poll,POLL);
+poll();
+</script>
+</body>
+</html>

@@ -22,6 +22,7 @@ from ls_percentile import LSPercentile
 from evaluate import evaluate_coin, build_alerts, render_coin_report
 from backtest import backtest, daily_backtest
 from news import get_latest_news                          # P2-7：死代码，下一批清理
+import panel                                              # 只读 H5 面板（展示层）
 pushed_news = set()                                       # P2-7：死代码，下一批清理
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,25 +39,32 @@ last_backtest_result = ""
 
 
 def run_alert(key, title, body, cooldown=None):
-    """统一出口：判冷却 → 上报 → 记账。通道失败不影响"该不该报"的判断。"""
+    """统一出口：判冷却 → 上报 → 记账。返回 (是否上报, 原因)。
+
+    通道失败不影响"该不该报"的判断；返回值只用于展示/计数，判定逻辑不变。
+    """
     cd = float(ALERT_COOLDOWN_MIN if cooldown is None else cooldown)   # noqa: F405
     should, why = state.check(key, cd)
     if not should:
         print(f"[冷却] {title} —— {why}")
-        return False
+        return False, why
     state.mark(key)
     print(f"[报警] {title} —— {why}")
     notify(title, body)
-    return True
+    return True, why
 
 
 def monitor_once():
+    t0 = time.time()
+    panel_coins, panel_alerts, panel_errors = [], [], []      # 面板数据（只读视图，不参与判定）
     btc_chg = get_btc_chg()
 
     # BTC 暴跌避险（全局规则）
     if btc_chg < -3:
-        run_alert("BTC暴跌避险", "⚠️ BTC暴跌预警",
-                  f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
+        title, body = "⚠️ BTC暴跌预警", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓"
+        ok, why = run_alert("BTC暴跌避险", title, body)
+        panel_alerts.append({"t": datetime.now().strftime("%H:%M:%S"), "coin": "BTC",
+                             "title": title, "body": body, "fired": ok, "why": why})
 
     # 监测列表 = 常规币 + 到价提醒里单独配置的币（可能不在常规列表里）
     pairs = list(dict.fromkeys(list(CURRENCY_PAIRS) + list(PRICE_ALERT.keys())))   # noqa: F405
@@ -73,13 +81,21 @@ def monitor_once():
             res = evaluate_coin(pair, ls_state)
         except Exception as e:
             # 不静默跳过：把币种和原因打出来（原来只是 print(f"{coin}出错") 然后自己都不知道跳了谁）
-            print(f"[跳过] {pair} 评估失败：{type(e).__name__}: {e}")
+            msg = f"[跳过] {pair} 评估失败：{type(e).__name__}: {e}"
+            print(msg)
+            panel_errors.append(msg)
             continue
         res["btc_chg"] = btc_chg
+        fired = []
         for key, title, body in build_alerts(res):
-            if run_alert(key, title, body):
+            ok, why = run_alert(key, title, body)
+            if ok:
                 n_fired += 1
+            fired.append({"key": key, "title": title, "body": body, "fired": ok, "why": why})
+            panel_alerts.append({"t": datetime.now().strftime("%H:%M:%S"), "coin": res["coin"],
+                                 "title": title, "body": body, "fired": ok, "why": why})
         lines.extend(render_coin_report(res))
+        panel_coins.append(panel.coin_view(res, fired))
 
     desp = "\n".join(lines)
     if last_backtest_result:
@@ -90,6 +106,9 @@ def monitor_once():
     ls_state.save()
     if n_fired:
         beep()
+    # 刷新面板缓存（面板挂了/关掉都不影响上面任何一步）
+    panel.publish(coins=panel_coins, alerts=panel_alerts, errors=panel_errors,
+                  duration=time.time() - t0, btc_chg=btc_chg)
     return n_fired
 
 
@@ -97,6 +116,7 @@ if __name__ == "__main__":
     print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")      # noqa: F405
     print(f"通知通道：{', '.join(c.name for c in get_channels())}")
     print(f"报警冷却：{ALERT_COOLDOWN_MIN} 分钟（首次触发必报，持续条件按此间隔重报）")   # noqa: F405
+    panel.start()                                             # 只读 H5 面板；起不来不影响监控
     last_backtest_ts = time.time()
     last_day = datetime.now().day
     monitor_once()
