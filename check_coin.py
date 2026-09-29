@@ -1,36 +1,16 @@
-import sys
-sys.path.insert(0, 'crypto_monitor')
-from api import get_kline, get_trades, get_ls
-from indicators import get_indicator, get_daily_trend
-from strategy import calc_score
-from config import CHG_THRESHOLD
+"""单币快查（P1-7：直接复用 check_all_alerts 的同一份自检代码，不再各算一套）。
 
-pair = sys.argv[1] if len(sys.argv)>1 else "SUI_USDT"
-coin = pair.replace("_USDT","")
-thr = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
-ind_s = get_indicator(pair, "15m")
-ind_l = get_indicator(pair, "1h")
-daily_up = get_daily_trend(pair)
-trades = get_trades(pair)
-buy_v = sell_v = 0
-for t in trades:
-    v = float(t['amount']) * float(t['price'])
-    if t['side'] == 'buy': buy_v += v
-    else: sell_v += v
-flow = {'net_inflow': buy_v - sell_v}
-ls = get_ls(pair)
-try:
-    ls_ratio = float(ls[-1]['top_lsr_account'])
-except:
-    ls_ratio = 1
-b, s = calc_score(ind_s, ind_l, flow, ls_ratio, ind_s['df'])
-if not daily_up:
-    b -= 1.5
-print(f"【{coin}】")
-print(f"现价: {ind_s['close']}")
-print(f"今日涨幅: {ind_s['day_chg']:.2f}% (阈值{thr}%)")
-print(f"日线趋势: {'向上' if daily_up else '向下'}")
-print(f"买分: {b}, 卖分: {s} (阈值3.5)")
-avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
-cur_vol = ind_s['df']['vol'].iloc[-1]
-print(f"当前成交量: {cur_vol:.2f}, 1.5倍平均量: {avg_vol*1.5:.2f}, 够吗: {'够' if cur_vol>avg_vol*1.5 else '不够'}")
+    <python> check_coin.py SUI_USDT
+
+历史问题：原版自己复制了一份打分逻辑，并且用「1.5 倍平均量」而 main.py 用「1.2 倍」，
+两个脚本对同一件事给出不同答案。
+"""
+import sys
+
+from check_all_alerts import show
+from config import LS_HISTORY_FILE
+from ls_percentile import LSPercentile
+
+if __name__ == "__main__":
+    pair = sys.argv[1] if len(sys.argv) > 1 else "SUI_USDT"
+    show(pair, LSPercentile(LS_HISTORY_FILE))

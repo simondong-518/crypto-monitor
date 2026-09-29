@@ -1,10 +1,15 @@
 # 2026-09-26 策略模块：打分和信号判断
-from config import BUY_SCORE_THRESHOLD, SELL_SCORE_THRESHOLD
+# 2026-09-29 P1-1/P1-3：
+#   · 所有「形态」判断改用最近两根**已收盘** bar（ind_s['shadows']），不再用 iloc[-1]/[-2]
+#     —— iloc[-1] 是形成中的 bar，形态会在盘中反复变化
+#   · 量能用 ind_s['vol_ratio']（已收盘 bar 的量能比）
+#   · 大户多空比不再用固定 1.0 阈值，改用语币自身的滚动分位数 ls_pct（0~100 或 None）
+from config import BUY_SCORE_THRESHOLD, SELL_SCORE_THRESHOLD, LS_BUY_PCT, LS_SELL_PCT
 
 # 记录每个币上次信号状态，用于信号反转提醒
 last_signal = {}
 
-def calc_score(ind_s, ind_l, flow, top_ratio, df):
+def calc_score(ind_s, ind_l, flow, ls_pct, df):
     buy = sell = 0
     close = ind_s['close']
     # BOLL三线向上判断
@@ -19,8 +24,7 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
         sell += 0.5
     # BOLL规则
     boll_width = (ind_s['boll_u'] - ind_s['boll_l']) / ind_s['boll_m']
-    vol_now = df['vol'].iloc[-1]
-    vol_avg = df['vol'].rolling(20).mean().iloc[-1]
+    vol_ratio = ind_s['vol_ratio']        # 已收盘 bar 的量能比（P1-1）
     if close <= ind_s['boll_l']*1.005:
         if ind_s['trend_up']:
             # 上涨碰下轨：4h向上加1.5，4h向下加0.75
@@ -33,18 +37,14 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
             pass
     if close >= ind_s['boll_u']*0.995:
         # 收口+放量突破上轨=启动上涨，加买分
-        if boll_width < 0.03 and vol_now > vol_avg*1.5:
+        if boll_width < 0.03 and vol_ratio > 1.5:
             buy +=1.5
         elif not ind_s['trend_up']:
             sell += 1.5
         else:
-            # 上涨碰上轨：连续上影才加卖分
-            row1 = df.iloc[-1]
-            row2 = df.iloc[-2]
-            body1 = abs(row1['close'] - row1['open'])
-            upper1 = row1['high'] - max(row1['open'], row1['close'])
-            body2 = abs(row2['close'] - row2['open'])
-            upper2 = row2['high'] - max(row2['open'], row2['close'])
+            # 上涨碰上轨：连续上影才加卖分（用最近两根**已收盘** bar）
+            body1, upper1, _ = ind_s['shadows'][0]
+            body2, upper2, _ = ind_s['shadows'][1]
             two_upper = upper1 > body1*2 and upper2 > body2*2
             if two_upper:
                 sell += 1.5
@@ -59,14 +59,10 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
         if (last3['close'] < last3['open']).all() and close < ind_s['boll_m']:
             sell += 1.5
     # 连续2根长下影+跌到下轨+从最低点反弹1-3%：卖分减2，加买分
-    row1 = df.iloc[-1]
-    row2 = df.iloc[-2]
-    body1 = abs(row1['close'] - row1['open'])
-    lower1 = min(row1['open'], row1['close']) - row1['low']
-    body2 = abs(row2['close'] - row2['open'])
-    lower2 = min(row2['open'], row2['close']) - row2['low']
+    body1, _, lower1 = ind_s['shadows'][0]
+    body2, _, lower2 = ind_s['shadows'][1]
     two_lower = lower1 > body1*2 and lower2 > body2*2
-    recent_low = min(row1['low'], row2['low'])
+    recent_low = min(float(df['low'].iloc[-2]), float(df['low'].iloc[-3]))   # 最近两根已收盘 bar
     rebound_pct = (close - recent_low)/recent_low*100
     rebound_ok = 1 <= rebound_pct <=3
     if two_lower and close <= ind_s['boll_l']*1.01 and rebound_ok:
@@ -74,12 +70,8 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
         buy +=1
     # RSI规则（双周期共振）
     # 上涨途中不随便喊卖：只有连续2根长上影才加RSI卖分
-    row1 = df.iloc[-1]
-    row2 = df.iloc[-2]
-    body1 = abs(row1['close'] - row1['open'])
-    upper1 = row1['high'] - max(row1['open'], row1['close'])
-    body2 = abs(row2['close'] - row2['open'])
-    upper2 = row2['high'] - max(row2['open'], row2['close'])
+    body1, upper1, _ = ind_s['shadows'][0]
+    body2, upper2, _ = ind_s['shadows'][1]
     two_upper = upper1 > body1*2 and upper2 > body2*2 and ind_s['boll_all_up']
     # 15m RSI
     if ind_s['rsi'] <30: buy +=1
@@ -100,9 +92,14 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
     if ind_s['kdj_j'] > 100: sell +=1
     if ind_s['k_gold']: buy +=0.5
     if ind_s['k_dead']: sell +=0.5
-    # 大户多空比：>1加买，<1加卖
-    if top_ratio < 1: sell +=1
-    if top_ratio > 1: buy +=1
+    # 大户多空比（P1-3）：按币自身滚动分位数打分，阈值与方向都在 config 里
+    # 原来是写死的 >1 加买分 / <1 加卖分 —— 实测 6 个币的 account 口径全在 0.48~0.67，
+    # 所以"加买分"那一支**一次都拿不到**，"加卖分"近乎恒真。预热期 ls_pct=None，不加分。
+    if ls_pct is not None:
+        if ls_pct >= LS_BUY_PCT:
+            buy += 1
+        elif ls_pct <= LS_SELL_PCT:
+            sell += 1
     # 资金持续流出时，就算到下轨也不抄底：买分减1
     if flow['net_inflow'] < -1000 and close <= ind_s['boll_l']*1.01:
         buy -= 1

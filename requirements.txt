@@ -1,0 +1,12 @@
+# crypto-monitor 运行依赖
+# 安装：pip install -r requirements.txt
+#
+# 说明：原来没有这个文件，换台机器直接 python main.py 会报
+#   indicators.py line 1: ModuleNotFoundError: No module named 'pandas'
+# 然后没有任何提示告诉你去装什么。
+
+requests>=2.28
+pandas>=1.5
+
+# 只有 update_doc.py 用到（该脚本计划删除，见 P2-12）；不影响主程序运行
+python-docx>=0.8.11
