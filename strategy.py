@@ -50,6 +50,14 @@ def calc_score(ind_s, ind_l, flow, top_ratio, df):
                 sell += 1.5
             else:
                 buy += 0.5
+    # 连续3根阳线/阴线（补做2/3：原补丁脚本 fix_score.py / add_down3.py 的目标逻辑）
+    # 用「已收盘」的3根 df.iloc[-4:-1]，排除形成中的 bar —— 原脚本用 df.tail(3) 会把未收盘 bar 算进去
+    last3 = df.iloc[-4:-1]
+    if len(last3) == 3:
+        if (last3['close'] > last3['open']).all() and close > ind_s['boll_m']:
+            buy += 1.5
+        if (last3['close'] < last3['open']).all() and close < ind_s['boll_m']:
+            sell += 1.5
     # 连续2根长下影+跌到下轨+从最低点反弹1-3%：卖分减2，加买分
     row1 = df.iloc[-1]
     row2 = df.iloc[-2]

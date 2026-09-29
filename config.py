@@ -25,6 +25,9 @@ CHG_THRESHOLD = {
 BUY_SCORE_THRESHOLD = 3.5
 SELL_SCORE_THRESHOLD = 3.5
 
+# 涨幅过大阈值（%）：日涨幅达到此值后不再提示"拿住"，改为提示高位止盈（补做4）
+HIGH_CHG_THRESHOLD = 10.0
+
 # 每个信号最多推送次数
 MAX_PUSH_PER_SIGNAL = 3
 

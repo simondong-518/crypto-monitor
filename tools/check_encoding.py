@@ -29,22 +29,31 @@ BOMS = {
 
 CYRILLIC_ISH = ("\u4e00", "\u9fff")  # CJK 统一表意文字区间
 
+# 乱码字判据：GB2312 一级字库（GBK 编码 B0A1-D7F9，共 3755 个常用字）之外的 CJK 字算「罕见字」。
+# UTF-8→GBK 二次编码产生的乱码字压倒性地落在罕见字区间，而正常中文几乎全在常用字区间。
+# 实测：对 332b7ce 的原始 main.py 命中 16/17 行乱码（≥2 罕见字/行），15 个文件 0 误报。
+# 已知边界：L144「# 寤鸿」漏检 —— 它只剩 2 个字、其中一个（鸿）属于一级字库，罕见字只有 1 个。
+#   这条规则是「兜底」，不是唯一防线：BOM / 非 UTF-8 / 参与逻辑判断的中文字面量 这三项都是精确判据。
+# 早期版本用硬编码乱码字表，漏得更多（L117 就没命中），所以换成这条不依赖字表的规则。
 SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
-
-# 本项目 v2.2.1~v2.2.9 实际出现过的乱码字（人工核对过，已剔除 块/定 等真实汉字——
-# 它们曾在我的第一次扫描里造成误报）。用「疑似」级别报告，供人工确认。
-# 严格还原（restore）判据对含 € 等 GBK 单字节字符的行会失效，这类行靠本表兜底。
-SUSPICIOUS_CHARS = set(
-    "鍔犺浇鎺ㄩ佽褰瀛樻渶杩戜娆洖娴嬬粨鏋鏆磋穼閬櫓鎻愰鍑洪敊涓诲惊鐜嚭閿"
-    "涔板叆鍗栧嚭鎴愪粨鍏ㄩ儴姝㈢泩鎹熷埌浣犺缃殑鍒拱绛夊洖璋冭傛湜鏄庣‘淇"
-    "彿浠婃棩澶定澶ц穼瓒嬪娍涓婃定涓嬭穼瓒呭崠瓒呬拱鏈杩戝洖娴嬭鎸囨爣鏁板€煎"
-    "垽鏂敮鍘嬪姏绂诲帇鍔涜祫閲戞祦鍚戝ぇ鎴峰姣斿彿鎸佷粨寤鸿绌轰粨缁撹鏄庢樉"
-    "娴佸叆鍑哄ぉ瓒呭競鍨冮噺鐜伴樁鐩堜环鎹熶环鏂俊鍙峰搧鐗岃矾馃鎵撳垎"
-)
 
 
 def is_cjk(ch: str) -> bool:
     return CYRILLIC_ISH[0] <= ch <= CYRILLIC_ISH[1]
+
+
+def is_rare_cjk(ch: str) -> bool:
+    """CJK 字，且不在 GB2312 一级字库（常用字 3755 个）之内。"""
+    if not is_cjk(ch):
+        return False
+    try:
+        b = ch.encode("gbk")
+    except UnicodeEncodeError:
+        return True
+    if len(b) != 2:
+        return False  # € 等 GBK 单字节字符不算（它不可能是乱码字）
+    lo, hi = b[0], b[1]
+    return not (0xB0 <= lo <= 0xD7 and not (lo == 0xD7 and hi > 0xF9))
 
 
 def runs_of_non_ascii(line: str) -> list[str]:
@@ -107,9 +116,9 @@ def check_file(path: Path, all_types: bool) -> tuple[list[str], list[str], list[
                 flagged = True
                 break
         if not flagged:
-            hits = [c for c in line if c in SUSPICIOUS_CHARS]
+            hits = list(dict.fromkeys(c for c in line if is_rare_cjk(c)))
             if len(hits) >= 2:
-                suspicious.append(f"L{i}: 命中乱码字 {''.join(hits[:8])}  ← {line.strip()[:60]}")
+                suspicious.append(f"L{i}: 罕见字 {''.join(hits[:10])}  ← {line.strip()[:60]}")
         if any(op in line for op in ("==", "!=")) or " in " in line:
             for q in ('"', "'"):
                 parts = line.split(q)
@@ -155,7 +164,7 @@ def main(argv: list[str]) -> int:
                 print(f"         {m}")
         if suspicious:
             failed = True
-            print(f"  [错误] 疑似乱码 {len(suspicious)} 行（含 GBK 单字节字符，无法严格还原，需人工确认）：")
+            print(f"  [错误] 疑似乱码 {len(suspicious)} 行（≥2 个罕见字，无法严格还原，需人工确认）：")
             for s in suspicious:
                 print(f"         {s}")
         if cjk_compare:

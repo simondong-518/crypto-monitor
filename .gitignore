@@ -1,0 +1,17 @@
+# 运行状态：程序会读写这个文件，属于本机私有，不要入库
+# 历史问题：它曾被提交进仓库，里面带着“今天已经推满 3 次”的计数，
+#          换台机器一启动就直接把当天的告警压掉，而且界面没有任何提示。
+pushed.json
+pushed_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.log
+
+# 本地密钥覆盖（如需把 SendKey 从 config.py 拆出来，放这里）
+config.local.py
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db

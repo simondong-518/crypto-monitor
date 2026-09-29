@@ -1,4 +1,5 @@
-﻿import json
+import json
+import os
 import time
 import re
 from datetime import datetime
@@ -11,20 +12,42 @@ from news import get_latest_news
 pushed_news = set()
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
-# 鍔犺浇鎺ㄩ€佽褰?
-pushed_file = "pushed.json"
-try:
-    with open(pushed_file, "r") as f:
-        pushed = json.load(f)
-except:
-    pushed = {}
+# 加载推送记录（只保留当天，key 形如 "2026-09-29|SUI_今日大跌"）
+# 历史坑：key 不带日期 + 状态文件入库 → 昨天顶到上限的告警今天继续被压掉，且界面没有任何提示
+pushed_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pushed.json")
 
-# 瀛樻渶杩戜竴娆″洖娴嬬粨鏋?
+
+def _today():
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def load_pushed():
+    try:
+        with open(pushed_file, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    prefix = _today() + "|"
+    kept = {k: v for k, v in raw.items() if k.startswith(prefix)}
+    dropped = len(raw) - len(kept)
+    if dropped:
+        print(f"[状态] 丢弃 {dropped} 条非当天推送计数（只保留 {prefix}*）")
+    return kept
+
+
+pushed = load_pushed()
+
+# 存最近一次回测结果
+# 注意：下一行是历史遗留的影子变量（P0-5），它遮蔽了上面 import 进来的 backtest.last_result，
+# 导致回测结果永远进不了推送。回测整块已跳过，本轮不动它，仅修掉乱码注释。
 last_backtest_result = ""
 
+
 def save_pushed():
-    with open(pushed_file, "w") as f:
-        json.dump(pushed, f)
+    with open(pushed_file, "w", encoding="utf-8") as f:
+        json.dump(pushed, f, ensure_ascii=False)
 
 def analyze_trades(trades):
     buy_v = sell_v = 0
@@ -34,19 +57,36 @@ def analyze_trades(trades):
         else: sell_v += v
     return {"buy_volume": buy_v, "sell_volume": sell_v, "net_inflow": buy_v - sell_v}
 
+
+def day_chg_alerts(day_chg, trend_up, vol_enough, threshold):
+    """涨跌幅相关提醒。抽成纯函数：可单测，也为将来的规则命中统计（N11）铺路。"""
+    out = []
+    big = f"今日{'大涨' if day_chg > 0 else '大跌'}{day_chg:.1f}%"
+    if abs(day_chg) >= 5:
+        out.append(big)
+        if day_chg > 0 and day_chg >= HIGH_CHG_THRESHOLD:
+            # 补做4（原提交 c67713c 声称的功能，实际一行没写）：涨太多不再喊拿住
+            out.append("，涨幅过大，高位止盈落袋")
+        elif trend_up and day_chg > 0:
+            out.append("，趋势启动，拿住")
+    elif abs(day_chg) >= threshold and vol_enough:
+        out.append(big)
+    return out
+
+
 def monitor_once():
     btc_chg = get_btc_chg()
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
         send_wx("⚠️ BTC暴跌预警", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
-    # 鑷畾涔夊埌浠锋彁閱?
+    # 自定义到价提醒
     for alert_pair, (take_profit, stop_loss) in PRICE_ALERT.items():
         coin = alert_pair.replace("_USDT","")
         try:
             ind = get_indicator(alert_pair, "15m")
             price = ind['close']
-            key_tp = f"{coin}_止盈{take_profit}"
-            key_sl = f"{coin}_止损{stop_loss}"
+            key_tp = f"{_today()}|{coin}_止盈{take_profit}"
+            key_sl = f"{_today()}|{coin}_止损{stop_loss}"
             if price >= take_profit and pushed.get(key_tp, 0) < MAX_PUSH_PER_SIGNAL:
                 pushed[key_tp] = pushed.get(key_tp,0)+1
                 send_wx(f"✅ {coin}到止盈价！", f"现价{price}，到你设置的止盈价{take_profit}，可以卖出止盈了")
@@ -69,29 +109,24 @@ def monitor_once():
             ls = get_ls(pair)
             lsd = ls[-1] if ls else {'top_lsr_account': 1}
             top_ratio = float(lsd['top_lsr_account'])
-            # 鎵撳垎
+            # 打分
             b_score, s_score = calc_score(ind_s, ind_l, flow, top_ratio, ind_s['df'])
             # 日线大趋势过滤：日线向下，买分减1.5
             if not daily_up:
                 b_score -= 1.5
-            # 4灏忔椂澶ц秼鍔胯繃婊?
+            # 4小时大趋势过滤
             ind_4h = get_indicator(pair, "4h")
             if not ind_4h['trend_up']:
                 b_score -= 1
             current_signal, reverse_alert = get_signal(coin, b_score, s_score, ind_s, ind_l)
-            # 鐢熸垚鎻愰啋
+            # 生成提醒
             alerts = []
             threshold = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
             # 涨跌幅提醒必须伴随成交量>1.2倍平均量
             avg_vol = ind_s['df']['vol'].rolling(20).mean().iloc[-1]
             cur_vol = ind_s['df']['vol'].iloc[-1]
             vol_enough = cur_vol > avg_vol * 1.2
-            if abs(ind_s['day_chg']) >= 5:
-                alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
-                if ind_s['trend_up'] and ind_s['day_chg']>0:
-                    alerts.append("锛岃秼鍔垮惎鍔紝鎷夸綇")
-            elif abs(ind_s['day_chg']) >= threshold and vol_enough:
-                alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
+            alerts.extend(day_chg_alerts(ind_s['day_chg'], ind_s['trend_up'], vol_enough, threshold))
             ma20 = ind_s['df']['close'].rolling(20).mean().iloc[-1]
             prev_close = ind_s['df']['close'].iloc[-2]
             if prev_close > ma20 and ind_s['close'] < ma20 and ind_s['trend_up']:
@@ -110,11 +145,11 @@ def monitor_once():
             if alerts:
                 alert_str = ''.join(alerts)
                 stable_alert = re.sub(r'\d+\.?\d*%', '%', alert_str)
-                key = f"{coin}_{stable_alert}"
+                key = f"{_today()}|{coin}_{stable_alert}"
                 if pushed.get(key, 0) < MAX_PUSH_PER_SIGNAL:
                     pushed[key] = pushed.get(key, 0) + 1
                     alerts_all.append((coin, alerts))
-            # 鐢熸垚鎶ュ憡琛?
+            # 生成报告表
             sync = "同步上涨" if ind_s['day_chg']*btc_chg>0 else "背离"
             lines.append(f"## {coin}/USDT ${ind_s['close']} ({ind_s['day_chg']:+.2f}%, {sync})")
             lines.append("")
@@ -141,20 +176,20 @@ def monitor_once():
             lines.append(f"| 大户多空比 | {top_ratio:.2f} | {'偏空' if top_ratio<0.7 else '偏多' if top_ratio>1.3 else '平衡'} |")
             s_emoji = "🟢" if current_signal=="买入" else ("🔴" if current_signal=="卖出" else "⚪")
             lines.append(f"| 15m信号 | {s_emoji} {current_signal} | 买{b_score:.1f}/卖{s_score:.1f} |")
-            # 寤鸿
+            # 建议
             stop_loss = ind_s['boll_l']
             take_profit = ind_s['boll_u']
             daily_judge = "日线向上" if daily_up else "日线向下"
-            if current_signal == "涔板叆":
-                # 浠撲綅寤鸿锛氭棩绾垮悜涓婁拱3鎴愶紝鏃ョ嚎鍚戜笅涔?鎴?
+            if current_signal == "买入":
+                # 仓位建议：日线向上买3成，日线向下买1成
                 if daily_up:
-                    pos = "3鎴愪粨"
+                    pos = "3成仓"
                 else:
                     pos = "1成轻仓"
                 hold_advice = f"可以买入{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
                 empty_advice = f"可以建仓{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
-            elif current_signal == "鍗栧嚭":
-                hold_advice = "鍏ㄩ儴姝㈢泩/姝㈡崯鍗栧嚭"
+            elif current_signal == "卖出":
+                hold_advice = "全部止盈/止损卖出"
                 empty_advice = "别买，等回调"
             else:
                 hold_advice = "持有观望，不动"
@@ -165,7 +200,7 @@ def monitor_once():
             lines.append(f"**空仓建议**: {empty_advice}")
             lines.append("")
         except Exception as e:
-            print(f"{coin}鍑洪敊: {e}")
+            print(f"{coin}出错: {e}")
             continue
     if alerts_all:
         alert_lines = ["", f"## 🔔 新信号({len(alerts_all)}个币))", ""]
@@ -195,9 +230,11 @@ if __name__ == "__main__":
             now_hour = datetime.now().hour
             now_min = datetime.now().minute
             now_day = datetime.now().day
-            # 姣忓ぉ0鐐硅嚜鍔ㄦ竻绌烘帹閫佽褰?
+            # 每天0点自动清空推送记录
             if now_day != last_day:
-                pushed.clear()
+                # 新的一天：清掉旧日期前缀的计数（新 key 带新日期，不会再命中旧 key）
+                for stale in [k for k in pushed if not k.startswith(_today() + "|")]:
+                    pushed.pop(stale, None)
                 save_pushed()
                 last_day = now_day
             check_events()
@@ -208,5 +245,5 @@ if __name__ == "__main__":
             if now_hour == 23 and now_min >= 50:
                 daily_backtest()
         except Exception as e:
-            print(f"涓诲惊鐜嚭閿? {e}")
+            print(f"主循环出错: {e}")
         time.sleep(CHECK_INTERVAL)
