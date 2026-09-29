@@ -6,6 +6,9 @@ pushed_*.json
 alert_state*.json
 alerts.log
 logs/
+# 本机专用：记录该用哪个解释器（每台机器不一样，绝不入库）
+python_exe.txt
+.venv/
 
 # Python
 __pycache__/
