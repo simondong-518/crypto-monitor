@@ -9,6 +9,8 @@ logs/
 # 本机专用：记录该用哪个解释器（每台机器不一样，绝不入库）
 python_exe.txt
 .venv/
+# 多空比打分的历史样本也是运行时状态
+ls_history*.json
 
 # Python
 __pycache__/
