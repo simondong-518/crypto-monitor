@@ -29,6 +29,8 @@ BOMS = {
 
 CYRILLIC_ISH = ("\u4e00", "\u9fff")  # CJK 统一表意文字区间
 
+SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
+
 # 本项目 v2.2.1~v2.2.9 实际出现过的乱码字（人工核对过，已剔除 块/定 等真实汉字——
 # 它们曾在我的第一次扫描里造成误报）。用「疑似」级别报告，供人工确认。
 # 严格还原（restore）判据对含 € 等 GBK 单字节字符的行会失效，这类行靠本表兜底。
@@ -125,11 +127,19 @@ def main(argv: list[str]) -> int:
     if targets:
         files = [Path(t) for t in targets]
     else:
-        globs = ["*.py"] + (["*.md", "*.json", "*.bat"] if all_types else [])
-        files = sorted({p for g in globs for p in root.glob(g)})
+        pats = ["*.py"] + (["*.md", "*.json", "*.bat"] if all_types else [])
+        files = sorted(
+            {p for pat in pats for p in root.rglob(pat)
+             if not any(part in SKIP_DIRS for part in p.parts)}
+        )
 
+    me = Path(__file__).resolve()
     failed = False
+    print(f"待检查 {len(files)} 个文件（根目录：{root}）")
     for p in files:
+        if p.resolve() == me:
+            print("（跳过 check_encoding.py 自身：它内含乱码字样例，否则会自触发）")
+            continue
         errors, mojibake, cjk_compare, suspicious = check_file(p, all_types)
         if not (errors or mojibake or cjk_compare or suspicious):
             continue
