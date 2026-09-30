@@ -106,3 +106,14 @@ PANEL_HOST = "0.0.0.0"      # 0.0.0.0 = 局域网可访问（手机才看得到�
 PANEL_PORT = 8789
 PANEL_REFRESH_SEC = 10      # 前端每隔几秒问一次"有没有新数据"（只提示你刷新，不自动刷）
 
+# ==============================================
+# 本机私有配置（可选，**不进仓库**）
+#   不该提交的值（钉钉 webhook / 加签密钥 / Server酱 SendKey）写进 config_local.py，
+#   它在最后覆盖上面的同名变量。config_local.py 已在 .gitignore 里，不会被提交或推给对方。
+#   模板：把 config_local.example.py 复制成 config_local.py 再填。
+# ==============================================
+try:
+    from config_local import *          # noqa: F401,F403
+except ImportError:
+    pass
+

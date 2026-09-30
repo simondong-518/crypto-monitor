@@ -11,6 +11,8 @@ python_exe.txt
 .venv/
 # 多空比打分的历史样本也是运行时状态
 ls_history*.json
+# 本机私有配置（钉钉 webhook/密钥、SendKey 等）——**绝不入库**
+config_local.py
 
 # Python
 __pycache__/
