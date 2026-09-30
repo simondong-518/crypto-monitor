@@ -24,6 +24,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+import panel_chart
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "panel.html")
@@ -88,13 +89,12 @@ def coin_view(res, fired_alerts):
     """
     ind_s, ind_l, ind_4h = res["ind_s"], res["ind_l"], res["ind_4h"]
     flow = res["flow"]
-    spark = []
+    # 走势图序列：直接用 indicators 里那几个函数算（公式不可能和打分漂开）
     try:
-        closes = ind_s["df"]["close"]
-        spark = [_num(x) for x in closes.iloc[-49:-1].tolist()]     # 最近 48 根**已收盘**的收盘价
-        spark = [x for x in spark if x is not None]
-    except Exception:
-        spark = []
+        chart = panel_chart.series(ind_s["df"])
+    except Exception as e:                      # 显示层失败不影响监控
+        chart = None
+        print(f"[面板] {res['coin']} 走势图序列失败：{type(e).__name__}: {e}")
     return {
         "coin": res["coin"], "pair": res["pair"],
         "price": _num(ind_s["price"]),
@@ -112,7 +112,7 @@ def coin_view(res, fired_alerts):
         "ls_pct": _num(res["ls_pct"]), "ls_n": res["ls_n"],
         "buy": _num(res["b_score"]), "sell": _num(res["s_score"]),
         "signal": res["signal"],
-        "spark": spark,
+        "chart": chart,
         "alerts": fired_alerts,
     }
 
@@ -163,34 +163,7 @@ def snapshot():
 
 
 # ────────────────────────────────────────────────────────── 服务端渲染
-def _spark_svg(vals, live=None, w=520, h=58):
-    if not vals or len(vals) < 2:
-        return '<div class="hint">（暂无走势数据）</div>'
-    data = list(vals) + ([live] if live is not None else [])
-    lo, hi = min(data), max(data)
-    if hi <= lo:
-        hi = lo + (abs(lo) * 0.001 or 1.0)
-    rng = hi - lo
-    pad = rng * 0.08
-    lo -= pad
-    hi += pad
-    step = w / (len(vals) - 1)
-
-    def y(v):
-        return h - (v - lo) / (hi - lo) * h
-
-    pts = " ".join(f"{i * step:.1f},{y(v):.1f}" for i, v in enumerate(vals))
-    last = vals[-1]
-    up = (live if live is not None else last) >= vals[0]
-    color = "#3fb950" if up else "#f85149"
-    dot = ""
-    if live is not None:
-        lx, ly = w, y(live)
-        dot = f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3.2" fill="#58a6ff"/>'
-    return (f'<svg class="spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
-            f'role="img" aria-label="最近 {len(vals)} 根收盘价走势">'
-            f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.6"/>'
-            f'{dot}</svg>')
+# 走势图渲染搬到 panel_chart.py（4 个子图：价格 / BOLL / RSI / MACD）
 
 
 def _coin_block(c):
@@ -242,10 +215,10 @@ def _coin_block(c):
             f'<div class="body">{a.get("body","").replace(chr(10), "<br>")}</div></li>'
             for a in c["alerts"])
         al = f'      <div class="sec">该币报警</div>\n      <ul class="alerts">\n{items}\n      </ul>'
-    return f"""  <details open class="coin {cls}">
+    return f"""  <details open class="coin {cls}" data-persist="coin:{coin}">
     <summary>{coin}/USDT　{fmt(c["price"])}　<span class="{"up" if chg>=0 else "down"}">{chg:+.2f}%</span>　{sig}{badge}</summary>
     <div class="inner">
-      {_spark_svg(c["spark"], live=c["price"])}
+{panel_chart.render_chart(coin, c["chart"]) if c.get("chart") else '      <div class="hint">（走势图数据不可用）</div>'}
       <table class="m">
         <tr><th>项目</th><th>数值</th><th>口径 / 来源</th></tr>
 {trs}
@@ -326,7 +299,16 @@ def render_page():
     if not s.get("coins"):
         body = f'<div class="note">{s.get("note") or "正在取数…"}</div>'
     else:
-        body = "\n".join(_coin_block(c) for c in s["coins"])
+        blocks = []
+        for c in s["coins"]:
+            try:
+                blocks.append(_coin_block(c))
+            except Exception as e:      # 单枚币渲染坏掉不能把整页弄死（改版最容易踩）
+                print(f"[面板] {c.get('coin')} 这块渲染失败：{type(e).__name__}: {e}", flush=True)
+                blocks.append(f'<div class="hint">⚠️ {c.get("coin") or "?"} 这块渲染失败：'
+                              f'{type(e).__name__}: {e}<br>监控与报警不受影响；'
+                              f'细节见跑监控那个窗口 / 日志。</div>')
+        body = "\n".join(blocks)
     html = (tpl.replace("[[VERSION]]", str(s.get("version") or ""))
                .replace("[[SEQ]]", str(s.get("seq") or 0))
                .replace("[[ROUND]]", str(s.get("round") or 0))
@@ -359,7 +341,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
         if path == "/":
-            html, ctype = render_page()
+            try:
+                html, ctype = render_page()
+            except Exception as e:      # 渲染抛异常时给一张能看懂的错误页，而不是断连接
+                import traceback
+                tb = traceback.format_exc().strip().splitlines()[-3:]
+                print(f"[面板] 渲染失败：{type(e).__name__}: {e}", flush=True)
+                html = ("<meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+                        "<h2>⚠️ 面板渲染失败</h2><p>监控与报警不受影响，数据仍在 "
+                        "<a href='/api/state'>/api/state</a>。</p><pre>"
+                        + "\n".join(tb) + "</pre>")
+                ctype = "text/html; charset=utf-8"
             self._send(200, html.encode("utf-8"), ctype)
         elif path == "/api/state":
             s = snapshot()

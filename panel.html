@@ -32,6 +32,9 @@ body{background:var(--bg);color:var(--fg);
 .wrap{max-width:1100px;margin:0 auto;padding:10px 10px 30px}
 header.top{position:sticky;top:0;z-index:9;background:var(--bg);padding:8px 0 6px;
   border-bottom:1px solid var(--hair);margin-bottom:10px}
+/* 顶部工具条是 sticky 的，锚点跳转/滚动定位时币卡标题会被它盖住（实测盖 92px）。
+   scroll-margin 让浏览器自己留出这块高度，以后改工具条高度也不用动这里。*/
+details.coin, details.ch{scroll-margin-top:96px}
 h1{font-size:16px;margin:0 0 2px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 h1 .spark{font-size:15px}
 .sub{font-size:11.5px;color:var(--dim)}
@@ -82,8 +85,17 @@ table.ovt{background:var(--panel);border:1px solid var(--line);border-radius:8px
 .ovt tr.ovr td:first-child{font-weight:700}
 .ovt .sig-u{color:var(--up);font-weight:700}
 .ovt .sig-d{color:var(--down);font-weight:700}
-svg.spark{width:100%;height:58px;display:block;margin:2px 0 8px;background:var(--bg);
-  border:1px solid var(--hair);border-radius:6px}
+/* 走势图子图：**每项总高仍是 58px**（与原来那根走势图一致）。
+   时间刻度用 HTML 叠在 SVG 底部的空白带上 —— 放进 SVG 会被 preserveAspectRatio="none" 拉变形。*/
+details.ch{background:var(--bg);border:1px solid var(--hair);border-radius:6px;margin:0 0 6px}
+details.ch>summary{padding:5px 9px;font-size:12px;background:transparent}
+details.ch>summary:hover{background:var(--hair)}
+details.ch>summary::after{content:""}
+details.ch .cv{color:var(--dim);font-weight:400;font-size:11.5px;margin-left:6px}
+.chartbox{position:relative;padding:0 8px 2px}
+svg.chart{width:100%;height:58px;display:block}
+.chartbox .xaxis{position:absolute;left:8px;right:8px;bottom:1px;height:12px;display:flex;
+  justify-content:space-between;font-size:9.5px;color:var(--dim);pointer-events:none}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--hair);font-size:12.5px;vertical-align:top}
 th{color:var(--dim);font-weight:500;font-size:11.5px}
@@ -126,6 +138,7 @@ a{color:var(--accent)}
     <button class="ghost" onclick="location.reload()">立即刷新</button>
     <button class="ghost" onclick="allDet(true)">全部展开</button>
     <button class="ghost" onclick="allDet(false)">全部收起</button>
+    <button class="ghost" onclick="resetDet()" title="忘掉记在本浏览器里的折叠状态，恢复默认">重置折叠</button>
   </div>
 </header>
 
@@ -139,24 +152,24 @@ a{color:var(--accent)}
   </table>
 </div>
 
-<details open>
+<details open data-persist="block:status">
   <summary>监控状态（第 <span id="rn">—</span> 轮 · 每 [[REFRESH]] 秒检查一次数据更新）</summary>
   <div class="inner">[[STATUS]]</div>
 </details>
 
-<details open>
-  <summary>指标与信号（[[COINN]] 个币 · 点开看逐项数值与口径）</summary>
+<details open data-persist="block:coins">
+  <summary>指标与信号（[[COINN]] 个币 · 点开看逐个币的走势图与逐项数值）</summary>
   <div class="inner">
 [[COINS]]
   </div>
 </details>
 
-<details open>
+<details open data-persist="block:alerts">
   <summary>报警（本轮 [[ALERTN]] 条 · 与 main.py 同一处判定）</summary>
   <div class="inner">[[ALERTS]]</div>
 </details>
 
-<details>
+<details data-persist="block:glossary">
   <summary>指标口径与数据来源（哪些是本地算的、哪些是接口直返的）</summary>
   <div class="inner">
     <div class="hint">
@@ -173,11 +186,16 @@ a{color:var(--accent)}
   </div>
 </details>
 
-<details>
-  <summary>怎么用这个页面 / 面板会不会影响监控</summary>
+<details data-persist="block:help">
+  <summary>怎么用这个页面 / 走势图 / 面板会不会影响监控</summary>
   <div class="inner">
     <div class="hint">
-      <b>手机上打开</b>：和监控进程在同一局域网，浏览器访问 <code>http://&lt;这台电脑的IP&gt;:端口/</code>；
+      <b>走势图</b>：每个币 4 个独立小图（价格 / BOLL / RSI / MACD），每项高度和原来那根一样（58px）、
+      可单独折叠；底部 3 个时间刻度就是"随时间更新"——每轮刷新窗口向右滚动，刻度跟着走。
+      图上最后一个点与打分用的值**同一条公式**（直接复用 <code>indicators.py</code>，
+      <code>verify_panel.py</code> 会断言两者一致，所以图不会和指标悄悄漂开）。<br>
+      <b>折叠状态会被记住</b>：你在本浏览器里收起/展开任何一块，刷新后保持原样（存在浏览器本地，
+      不发给服务器）。以后新增的区块也会自动被记住。想让一切回到默认：点「重置折叠」。<br>
       首次监听 Windows 防火墙会弹窗，勾选"专用网络"允许即可。<br>
       <b>面板是只读的</b>：它不写配置、不改监控列表、不触发推送、不参与判定。
       判定与报警全部由 <code>evaluate.py</code> / <code>main.py</code> 决定 ——
@@ -210,8 +228,40 @@ document.querySelectorAll('.themebtn').forEach(function(b){
 mq.addEventListener('change',function(){if(CHOICE==='system')applyTheme();});
 applyTheme();
 
-/* ── 折叠 ── */
-function allDet(v){document.querySelectorAll('details').forEach(function(d){d.open=v;});}
+/* ── 折叠状态记忆 ──────────────────────────────────────────────
+   任何 <details> 的展开/收起都会被记在这个浏览器里（localStorage），刷新后保持原样，
+   **不需要**每次刷新重新展开。
+   键 = data-persist（推荐显式写，带实时数字的标题必须显式写）；
+        没写的自动按 summary 文字派生一个稳定键（去掉数字/价格后取前 12 字），
+        所以**以后新加的区块不改这里也会自动被记住**。 */
+var PKEY = 'cm-open-state', PSTATE = {};
+try { PSTATE = JSON.parse(localStorage.getItem(PKEY) || '{}') || {}; } catch (e) { PSTATE = {}; }
+function pSave() { try { localStorage.setItem(PKEY, JSON.stringify(PSTATE)); } catch (e) {} }
+function dkey(d) {
+  if (d.dataset.persist) return d.dataset.persist;
+  var s = (d.querySelector('summary') ? d.querySelector('summary').textContent : '');
+  return 'auto:' + s.replace(/[0-9.,%×+\-—\s：:（）()]/g, '').slice(0, 12);
+}
+function applyPersist() {
+  document.querySelectorAll('details').forEach(function (d) {
+    var k = dkey(d);
+    if (Object.prototype.hasOwnProperty.call(PSTATE, k)) d.open = !!PSTATE[k];
+    if (!d.dataset.pbind) {
+      d.dataset.pbind = '1';
+      d.addEventListener('toggle', function () { PSTATE[k] = d.open; pSave(); });
+    }
+  });
+}
+function allDet(v) {
+  document.querySelectorAll('details').forEach(function (d) {
+    PSTATE[dkey(d)] = v; d.open = v;
+  });
+  pSave();
+}
+function resetDet() {
+  PSTATE = {}; pSave(); location.reload();
+}
+applyPersist();
 
 /* ── 下一轮倒计时 ── */
 function tick(){

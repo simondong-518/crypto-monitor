@@ -245,7 +245,9 @@ class FakeReq:
 names = [c.name for c in notifier.get_channels()]
 check("默认通道含控制台 + 文件留痕",
       any("控制台" in n for n in names) and any("文件" in n for n in names), str(names))
-check("未配置钉钉时不启用钉钉通道", not any("钉钉" in n for n in names), str(names))
+check("未配置钉钉时不启用钉钉通道（本机已配则反过来断言）",
+      (any("钉钉" in n for n in names) if getattr(config, "DINGTALK_WEBHOOK", "")
+       else not any("钉钉" in n for n in names)), str(names))
 check("Server酱 key 非空时启用", any("Server酱" in n for n in names), str(names))
 
 # 文件通道指向临时目录：测试绝不能往仓库里写 alerts.log
@@ -375,6 +377,36 @@ check("报告含 bar 口径说明", ("已收盘" in rep) and ("09:15" in rep), r
 check("报告同时展示 size 与 account 两个口径",
       ("持仓多空比" in rep) and ("账户多空比" in rep), rep)
 check("报告给出双向建议（持仓/空仓）", ("持仓建议" in rep) and ("空仓建议" in rep), rep)
+
+# ── 走势图（展示层）────────────────────────────────────────────
+# 为什么单列一节：序列与渲染都要**有数据**才会被走到，函数名写错（NameError）之类
+# 的错误在没有行情时完全测不出来，一上线有币了整页就 500。
+import panel_chart                                                            # noqa: E402
+_wave = pd.DataFrame([{"ts": str(1_700_000_000 + i * 900),
+                       "close": 100.0 + ((i * 37) % 23) - 11 + i * 0.05,
+                       "high": 101.0 + ((i * 37) % 23) - 11 + i * 0.05,
+                       "low": 99.0 + ((i * 37) % 23) - 11 + i * 0.05,
+                       "open": 100.0 + ((i * 37) % 23) - 11 + i * 0.05,
+                       "vol": 1000.0 + i} for i in range(100)])
+_s = panel_chart.series(_wave)
+_html = panel_chart.render_chart("SUI", _s)
+check("走势图窗口 = 显示根数（取到最后一根已收盘 bar）",
+      _s["n"] == panel_chart.N_BARS and len(_s["close"]) == _s["n"], f'n={_s["n"]}')
+check("走势图 4 个子图 + 4 个时间刻度",
+      _html.count('<svg class="chart"') == 4 and _html.count('class="xaxis"') == 4,
+      f'svg={_html.count(chr(60) + "svg class=" + chr(34) + "chart" + chr(34))} axis={_html.count("xaxis")}')
+check("走势图渲染不抛异常且标签配对（有数据才会走到的代码）",
+      _html.count("<details") == _html.count("</details>") and "<svg" in _html, _html[:120])
+check("走势图不泄漏 nan/None",
+      ("nan" not in _html.lower()) and ("None" not in _html), "")
+check("每条折线至少 2 个点",
+      all(len(p.split()) >= 2 for p in re.findall(r'points="([^"]*)"', _html)), "")
+check("图上最后一个点 == 该根已收盘 bar 的指标值（防漂移）",
+      abs(panel_chart.last_values(_s)["rsi"]
+          - float(__import__("indicators").calc_rsi(_wave["close"]).iloc[-2])) < 1e-6,
+      str(panel_chart.last_values(_s)["rsi"]))
+check("子图写显式折叠键（summary 里有实时数字，自动派生键会每轮变）",
+      _html.count('data-persist="chart:SUI:') == 4, "")
 
 # ============================================================ 汇总
 print("\n" + "-" * 70)
