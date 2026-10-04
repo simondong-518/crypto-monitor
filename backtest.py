@@ -40,7 +40,10 @@ def backtest():
                 profit = (price - future_price)/price - FEE_RATE*2
                 if profit > 0: win +=1
             # 买入信号
-            if price <= boll_l*1.005 and rsi<30 and price>boll_m:
+            # ★ 修 P1-2：原条件 `price <= boll_l*1.005 and rsi<30 and price>boll_m`
+            #   自相矛盾（boll_l < boll_m，不可能同时 <=下轨 且 >中轨）→ 分支永远进不去，
+            #   "买入信号胜率"永远是空的。改为：跌到下轨附近 + RSI 超卖 + 仍在中轨之下（低吸）。
+            if price <= boll_l*1.005 and rsi<30 and price < boll_m:
                 total +=1
                 profit = (future_price - price)/price - FEE_RATE*2
                 if profit > 0: win +=1
