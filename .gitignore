@@ -1,0 +1,17 @@
+# 本机私有配置与运行时产物 —— 绝不入库
+config_local.py
+FEISHU_WEBHOOK
+*.log
+logs/
+alerts.log
+# 运行时状态：报警冷却记录 / 推送去重 / 动态高低点
+alert_state*.json
+pushed.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+# 仓库噪音
+github_download/
+~$*.docx
+.DS_Store

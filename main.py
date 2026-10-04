@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import sys
 import io
 # 强制整个程序用UTF-8编码，解决Windows下中文乱码
@@ -10,23 +10,54 @@ import time
 import re
 # 统一资金换算：亿/万/千
 def fmt_money(v):
-    if abs(v) >= 100000000:
-        return f"${v/100000000:.2f}亿" if v>=0 else f"-${-v/100000000:.2f}亿"
-    elif abs(v) >= 10000:
-        return f"${v/10000:.1f}万" if v>=0 else f"-${-v/10000:.1f}万"
-    else:
-        return f"${v/1000:.1f}千" if v>=0 else f"-${-v/1000:.1f}千"
+    """统一资金单位：亿 / 万 / 元。负号统一放在 $ 前面（原来正数是 $x 万、负数是 -$x 万，看着别扭）。
+
+    修正点：门槛原来写成 >= 1e8 亿 / >= 1e4 万 / else 千，
+    所以 5 万以下会显示成"$50.0千"（应该显示"元"）。
+    """
+    sign = "-" if v < 0 else ""
+    a = abs(v)
+    if a >= 100000000:
+        return f"{sign}${a/100000000:.2f}亿"
+    if a >= 10000:
+        return f"{sign}${a/10000:.1f}万"
+    return f"{sign}${a:.0f}"
 from datetime import datetime
 from config import *
 from api import get_kline, get_trades, get_ls, get_btc_chg, check_events, get_flow_1h
 from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
-from notifier import send_wx
+from notifier import send_wx, beep
+from alert_state import AlertState, stable_alert_key
 from news import get_latest_news
 pushed_news = set()
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
-# 鍔犺浇鎺ㄩ€佽褰?
+# ============================================================
+# 报警状态：**冷却制**替代原来的"每个信号最多推 3 次"
+#
+# 原来那一套（pushed[key] < MAX_PUSH_PER_SIGNAL）的问题是：一个止损/跑路信号
+# 推满 3 次后**当天彻底哑掉**，屏幕上完全看不出来；为了绕开它又在下面加了 4 处
+# "方向反转清空计数""创新高清零"之类的补丁，逻辑越叠越难推理。
+# 现在：首次必报；条件仍在则每过 ALERT_COOLDOWN_MIN 分钟重报，**不设上限**。
+# ============================================================
+state = AlertState(ALERT_STATE_FILE, ALERT_COOLDOWN_MIN)
+
+
+def should_alert(key):
+    """值无关的稳定 key → 判断该不该上报（判定与提交分开，方便先算清楚）。"""
+    return state.should_report(key)
+
+
+def mark_alert(key):
+    state.mark(key)
+    save_pushed()          # 顺带落盘，进程被杀也不丢冷却状态
+
+
+def alert_reason(key):
+    return state.why(key)
+
+# 加载推送记录
 pushed_file = "pushed.json"
 try:
     with open(pushed_file, "r") as f:
@@ -79,21 +110,16 @@ def update_daily_extreme(pair, df, avg_vol):
     if coin not in DAILY_EXTREME["low"]:
         DAILY_EXTREME["low"][coin] = close_p
     # 更新有效高点：长上影插针不算，用收盘价；正常收盘新高就更新
+    # 注：原来这里在"创新高/创新低"时会遍历 pushed 清空该币的止盈/低吸计数。
+    # 那是为了绕开"最多推 3 次"的哑火问题；现在由 alert_state 的冷却制统一处理，
+    # 这些清空动作已无必要（删掉后 key 的语义更单纯，也更容易验证）。
     if upper_shadow > body*2:
         # 长上影，是压力位，用收盘价当有效高点
         if close_p > DAILY_EXTREME["high"][coin]:
             DAILY_EXTREME["high"][coin] = close_p
-            # 创了新高，清空这个币之前的止盈提醒计数，新的一波回撤要重新提醒
-            for k in list(pushed.keys()):
-                if k.startswith(f"{coin}_") and ("止盈" in k or "回撤" in k):
-                    del pushed[k]
     else:
         if close_p > DAILY_EXTREME["high"][coin]:
             DAILY_EXTREME["high"][coin] = close_p
-            # 创了新高，清空这个币之前的止盈提醒计数，新的一波回撤要重新提醒
-            for k in list(pushed.keys()):
-                if k.startswith(f"{coin}_") and ("止盈" in k or "回撤" in k):
-                    del pushed[k]
     # 更新有效低点：缩量长下影不算，放量下影是真底，用收盘价
     if lower_shadow > body*2:
         if vol_p < avg_vol*0.5:
@@ -103,17 +129,9 @@ def update_daily_extreme(pair, df, avg_vol):
             # 放量真底，用收盘价当有效低点
             if close_p < DAILY_EXTREME["low"][coin]:
                 DAILY_EXTREME["low"][coin] = close_p
-                # 创了新低，清空这个币之前的低吸/V反/超卖提醒计数，新的一波反弹要重新提醒
-                for k in list(pushed.keys()):
-                    if k.startswith(f"{coin}_") and ("低吸" in k or "V反" in k or "超卖" in k):
-                        del pushed[k]
     else:
         if close_p < DAILY_EXTREME["low"][coin]:
             DAILY_EXTREME["low"][coin] = close_p
-            # 创了新低，清空这个币之前的低吸/V反/超卖提醒计数，新的一波反弹要重新提醒
-            for k in list(pushed.keys()):
-                if k.startswith(f"{coin}_") and ("低吸" in k or "V反" in k or "超卖" in k):
-                    del pushed[k]
     return DAILY_EXTREME["high"][coin], DAILY_EXTREME["low"][coin]
 
 def monitor_once():
@@ -121,14 +139,14 @@ def monitor_once():
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
         key_btc = "BTC_暴跌预警"
-        if pushed.get(key_btc,0) < MAX_PUSH_PER_SIGNAL:
-            pushed[key_btc] = pushed.get(key_btc,0)+1
+        if should_alert(key_btc):
+            mark_alert(key_btc)
             send_wx("⚠️ BTC暴跌预警", f"BTC今日跌{btc_chg:.1f}%，所有币大概率跟跌，别抄底，手里有币逢高减仓")
     # BTC跌>1%温和风险提示
     elif btc_chg < -1:
         key_btc = "BTC_温和风险提示"
-        if pushed.get(key_btc,0) < MAX_PUSH_PER_SIGNAL:
-            pushed[key_btc] = pushed.get(key_btc,0)+1
+        if should_alert(key_btc):
+            mark_alert(key_btc)
             send_wx("⚠️ BTC风险提示", f"BTC今日跌{btc_chg:.1f}%，小币可能补跌，注意仓位")
     # 新闻提醒：宏观事件/单币新闻单独推，不参与打分
     coin_news, macro_news = get_latest_news()
@@ -140,20 +158,20 @@ def monitor_once():
         if n not in pushed_news:
             pushed_news.add(n)
             send_wx("📰 币圈新闻", n)
-    # 鑷畾涔夊埌浠锋彁閱?
+    # 自定义到价提醒
     for alert_pair, (take_profit, stop_loss) in PRICE_ALERT.items():
         coin = alert_pair.replace("_USDT","")
         try:
             ind = get_indicator(alert_pair, "15m")
             price = ind['close']
-            key_tp = f"{coin}_止盈{take_profit}"
-            key_sl = f"{coin}_止损{stop_loss}"
-            if price >= take_profit and pushed.get(key_tp, 0) < MAX_PUSH_PER_SIGNAL:
-                pushed[key_tp] = pushed.get(key_tp,0)+1
+            key_tp = f"{coin}_到止盈价"
+            key_sl = f"{coin}_到止损价"
+            if price >= take_profit and should_alert(key_tp):
+                mark_alert(key_tp)
                 send_wx(f"✅ {coin}到止盈价！", f"现价{price}，到你设置的止盈价{take_profit}，可以卖出止盈了")
                 beep()
-            if price <= stop_loss and pushed.get(key_sl, 0) < MAX_PUSH_PER_SIGNAL:
-                pushed[key_sl] = pushed.get(key_sl,0)+1
+            if price <= stop_loss and should_alert(key_sl):
+                mark_alert(key_sl)
                 send_wx(f"⚠️ {coin}到止损价！", f"现价{price}，到你设置的止损价{stop_loss}，注意风险")
                 beep()
         except: pass
@@ -169,39 +187,20 @@ def monitor_once():
             flow = analyze_trades(trades)
             # 计算1h累计资金
             flow_1h = get_flow_1h(pair)
-            # 方向反转自动清空计数：资金方向彻底反转时，清空旧方向信号计数
+            # 注：原来这里有 4 段"方向反转/创新高就清空计数"的补丁（约 60 行），
+            # 目的是绕开"每个信号最多推 3 次"导致的哑火。现在由 alert_state 的
+            # **冷却制**统一负责（首次必报、按间隔重报、不设上限），这 4 段补丁已无必要，
+            # 删掉后行为更可预期、代码少一半。
             cur_flow_dir = 1 if flow_1h > 50000 else (-1 if flow_1h < -50000 else 0)
-            prev_flow_dir = LAST_FLOW_DIR.get(coin, 0)
-            if prev_flow_dir == -1 and cur_flow_dir == 1:
-                # 从流出反转为流入，清空所有流出类计数
-                for k in list(pushed.keys()):
-                    if k.startswith(f"{coin}_") and ("跑路" in k or "流出" in k or "大幅出" in k):
-                        del pushed[k]
-            if prev_flow_dir == 1 and cur_flow_dir == -1:
-                # 从流入反转为流出，清空所有流入类计数
-                for k in list(pushed.keys()):
-                    if k.startswith(f"{coin}_") and ("进场" in k or "流入" in k or "大幅进" in k):
-                        del pushed[k]
             LAST_FLOW_DIR[coin] = cur_flow_dir
-            # RSI方向反转自动清空计数
+            # RSI 状态仅用于报告展示
             cur_rsi = ind_s['rsi']
-            if cur_rsi >=75:
+            if cur_rsi >= 75:
                 cur_rsi_state = "over"
-            elif cur_rsi <=25:
+            elif cur_rsi <= 25:
                 cur_rsi_state = "under"
             else:
                 cur_rsi_state = "normal"
-            prev_rsi_state = LAST_RSI_STATE.get(coin, "normal")
-            if prev_rsi_state == "over" and cur_rsi_state == "under":
-                # 从超买反转为超卖，清空所有超买类计数
-                for k in list(pushed.keys()):
-                    if k.startswith(f"{coin}_") and ("超买" in k or "上影" in k or "抛压" in k):
-                        del pushed[k]
-            if prev_rsi_state == "under" and cur_rsi_state == "over":
-                # 从超卖反转为超买，清空所有超卖类计数
-                for k in list(pushed.keys()):
-                    if k.startswith(f"{coin}_") and ("超卖" in k or "下影" in k or "低吸" in k):
-                        del pushed[k]
             LAST_RSI_STATE[coin] = cur_rsi_state
             # 计算taker买卖笔数
             buy_taker = sum(1 for t in trades if t['side']=='buy')
@@ -212,18 +211,18 @@ def monitor_once():
                 ls = ls.get('data', [])
             lsd = ls[-1] if ls else {'top_lsr_account': 1}
             top_ratio = float(lsd['top_lsr_account'])
-            # 鎵撳垎
+            # 打分
             b_score, s_score = calc_score(ind_s, ind_l, flow, top_ratio, ind_s['df'])
             # 日线大趋势过滤：日线向下，买分减1.5
             if not daily_up:
                 b_score -= 1.5
-            # 4灏忔椂澶ц秼鍔胯繃婊?
+            # 4小时大趋势过滤
             ind_4h = get_indicator(pair, "4h")
             if not ind_4h['trend_up']:
                 b_score -= 1
             current_signal = get_signal(b_score, s_score)
             reverse_alert = ""
-            # 鐢熸垚鎻愰啋
+            # 生成提醒
             alerts = []
             threshold = CHG_THRESHOLD.get(coin, CHG_THRESHOLD['default'])
             # 涨跌幅提醒必须伴随成交量>1.2倍平均量
@@ -240,8 +239,8 @@ def monitor_once():
             if upper1 > body1*2 and abs(ind_s['close'] - eff_high)/eff_high < 0.001 \
                 and flow['net_inflow'] < -1000 and top_ratio < 0.7 and day_chg_from_low >=5:
                 key_high = f"{coin}_当日高点"
-                if pushed.get(key_high,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_high] = pushed.get(key_high,0)+1
+                if should_alert(key_high):
+                    mark_alert(key_high)
                     alerts.append("🔴 触及当日真高，主力出货，注意止盈落袋")
             # 低点提醒：碰到当日有效低点+放量长下影+资金流入+大户不偏空
             lower1 = min(row1['open'], row1['close']) - row1['low']
@@ -249,21 +248,21 @@ def monitor_once():
             if lower1 > body1*2 and cur_vol >= avg_vol*1 and abs(ind_s['close'] - eff_low)/eff_low <0.001 \
                 and flow['net_inflow'] > 1000 and top_ratio > 0.7 and day_chg_from_high >=3:
                 key_low = f"{coin}_当日低点"
-                if pushed.get(key_low,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_low] = pushed.get(key_low,0)+1
+                if should_alert(key_low):
+                    mark_alert(key_low)
                     alerts.append("🟢 触及当日真底，主力接盘，关注买入机会")
             # 动态移动止盈：从有效高点回撤到阈值
             trail_ratio = TRAILING_STOP.get(pair, 0.035)
             drawdown = (eff_high - ind_s['close'])/eff_high
             if drawdown >= trail_ratio:
-                key_trail = f"{coin}_移动止盈{trail_ratio*100:.0f}%"
-                if pushed.get(key_trail,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_trail] = pushed.get(key_trail,0)+1
+                key_trail = f"{coin}_移动止盈"
+                if should_alert(key_trail):
+                    mark_alert(key_trail)
                     alerts.append(f"⚠️ 从高点回撤{drawdown*100:.1f}%，移动止盈落袋")
             if abs(ind_s['day_chg']) >= 5:
                 alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
                 if ind_s['trend_up'] and ind_s['day_chg']>0:
-                    alerts.append("锛岃秼鍔垮惎鍔紝鎷夸綇")
+                    alerts.append("，趋势启动，拿住")
             elif abs(ind_s['day_chg']) >= threshold and vol_enough:
                 alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
             # 缩量上涨提醒
@@ -276,58 +275,58 @@ def monitor_once():
             # EMA金叉死叉提醒
             if ind_s['golden_cross']:
                 key_gold = f"{coin}_EMA金叉"
-                if pushed.get(key_gold,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_gold] = pushed.get(key_gold,0)+1
+                if should_alert(key_gold):
+                    mark_alert(key_gold)
                     alerts.append("🟢 EMA金叉，短线多头启动")
             if ind_s['dead_cross']:
                 key_dead = f"{coin}_EMA死叉"
-                if pushed.get(key_dead,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_dead] = pushed.get(key_dead,0)+1
+                if should_alert(key_dead):
+                    mark_alert(key_dead)
                     alerts.append("🔴 EMA死叉，短线空头启动")
             # 新增：突破BOLL上轨提醒
             if ind_s['close'] > ind_s['boll_u'] and vol_enough:
                 key_break = f"{coin}_突破BOLL上轨"
-                if pushed.get(key_break,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_break] = pushed.get(key_break,0)+1
+                if should_alert(key_break):
+                    mark_alert(key_break)
                     alerts.append(f"✅ 放量突破BOLL上轨{ind_s['boll_u']:.4f}，可以追多")
             if reverse_alert:
                 alerts.append(reverse_alert)
             # 新增：跌破BOLL下轨超卖提醒
             if ind_s['close'] < ind_s['boll_l']:
                 key_break_l = f"{coin}_跌破BOLL下轨"
-                if pushed.get(key_break_l,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_break_l] = pushed.get(key_break_l,0)+1
+                if should_alert(key_break_l):
+                    mark_alert(key_break_l)
                     alerts.append(f"🟢 跌破BOLL下轨{ind_s['boll_l']:.4f}，超卖低吸机会")
             # 假突破上轨提醒：上根在上方，本根跌回上轨里面
             df_s = ind_s['df']
             prev_close = df_s.iloc[-2]['close']
             if prev_close > ind_s['boll_u'] and ind_s['close'] < ind_s['boll_u']:
                 key_fake_up = f"{coin}_假突破上轨"
-                if pushed.get(key_fake_up,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_fake_up] = pushed.get(key_fake_up,0)+1
+                if should_alert(key_fake_up):
+                    mark_alert(key_fake_up)
                     alerts.append(f"⚠️ 假突破上轨跌回，别追多")
             # 假跌破下轨提醒：上根在下方，本根涨回下轨里面
             if prev_close < ind_s['boll_l'] and ind_s['close'] > ind_s['boll_l']:
                 key_fake_down = f"{coin}_假跌破下轨"
-                if pushed.get(key_fake_down,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_fake_down] = pushed.get(key_fake_down,0)+1
+                if should_alert(key_fake_down):
+                    mark_alert(key_fake_down)
                     alerts.append(f"🟢 假跌破下轨涨回，别恐慌割肉")
             # 新增：资金大幅异动提醒
             if flow_1h > 100000:
                 key_flow = f"{coin}_主力大幅进"
-                if pushed.get(key_flow,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_flow] = pushed.get(key_flow,0)+1
+                if should_alert(key_flow):
+                    mark_alert(key_flow)
                     alerts.append(f"🟢 1h资金净流入{fmt_money(flow_1h)}，主力大幅进场")
             elif flow_1h < -100000:
                 key_flow = f"{coin}_主力大幅出"
-                if pushed.get(key_flow,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_flow] = pushed.get(key_flow,0)+1
+                if should_alert(key_flow):
+                    mark_alert(key_flow)
                     alerts.append(f"🔴 1h资金净流出{fmt_money(-flow_1h)}，主力大幅跑路")
             # 持续流出提醒：1h流出超50万，就算推过3次也再提醒
             if flow_1h < -500000:
                 key_persist = f"{coin}_持续流出风险"
-                if pushed.get(key_persist,0) < 1:
-                    pushed[key_persist] = pushed.get(key_persist,0)+1
+                if should_alert(key_persist):
+                    mark_alert(key_persist)
                     alerts.append(f"⚠️ 1h累计流出{fmt_money(-flow_1h)}，持续跑路，注意风险")
             # 新增：大户极端多空比提醒
             try:
@@ -336,25 +335,25 @@ def monitor_once():
                 ls_ratio = 1
             if ls_ratio < 0.5:
                 key_ls = f"{coin}_大户极空"
-                if pushed.get(key_ls,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_ls] = pushed.get(key_ls,0)+1
+                if should_alert(key_ls):
+                    mark_alert(key_ls)
                     alerts.append("🔴 大户多空比<0.5，极端偏空")
             elif ls_ratio > 2:
                 key_ls = f"{coin}_大户极多"
-                if pushed.get(key_ls,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_ls] = pushed.get(key_ls,0)+1
+                if should_alert(key_ls):
+                    mark_alert(key_ls)
                     alerts.append("🟢 大户多空比>2，极端偏多")
             # 新增：突破前高/前低0.5%就提前提醒，不等涨/跌2%
             df_s = ind_s['df']
             today_high = ind_s['today_high']
             today_low = ind_s['today_low']
             key_new_high = f"{coin}_提前突破前高"
-            if ind_s['close'] > today_high*1.005 and pushed.get(key_new_high,0) < MAX_PUSH_PER_SIGNAL:
-                pushed[key_new_high] = pushed.get(key_new_high,0)+1
+            if ind_s['close'] > today_high*1.005 and should_alert(key_new_high):
+                mark_alert(key_new_high)
                 alerts.append(f"🚀 突破前高0.5%，正在创新高")
             key_new_low = f"{coin}_提前跌破前低"
-            if ind_s['close'] < today_low*0.995 and pushed.get(key_new_low,0) < MAX_PUSH_PER_SIGNAL:
-                pushed[key_new_low] = pushed.get(key_new_low,0)+1
+            if ind_s['close'] < today_low*0.995 and should_alert(key_new_low):
+                mark_alert(key_new_low)
                 alerts.append(f"🔻 跌破前低0.5%，正在创新低")
             # 新增：15分钟资金流斜率，提前发现主力进场/跑路
             recent_flow_15 = flow['net_inflow']
@@ -379,7 +378,7 @@ def monitor_once():
             boll_m = ind_s['boll_mid']
             boll_l = ind_s['boll_l']
             # 下降趋势：三轨向下+价在中轨下，阈值翻倍
-            if boll_u < boll_m < boll_l and close < boll_m:
+            if boll_l < boll_m < boll_u and close < boll_m:   # 修：上轨>中轨>下轨；原来写反了，条件永远为假
                 base_in_thr *= 2
             # 接近上轨：流入阈值提高别追高，流出阈值降低逃顶
             if (boll_u - close)/close < 0.005:
@@ -408,8 +407,8 @@ def monitor_once():
                     MAX_FLOW_IN_15M[coin] = recent_flow_15
                     if key_fast_flow in pushed:
                         del pushed[key_fast_flow]
-                if pushed.get(key_fast_flow,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_fast_flow] = pushed.get(key_fast_flow,0)+1
+                if should_alert(key_fast_flow):
+                    mark_alert(key_fast_flow)
                     alerts.append(f"⚡ 最近15分钟资金流入{fmt_money(recent_flow_15)}，主力突然进场")
             elif out_trigger and confirm_pass:
                 prev_max_out = MAX_FLOW_OUT_15M.get(coin, 0)
@@ -419,20 +418,20 @@ def monitor_once():
                     MAX_FLOW_OUT_15M[coin] = cur_out_abs
                     if key_fast_flow in pushed:
                         del pushed[key_fast_flow]
-                if pushed.get(key_fast_flow,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_fast_flow] = pushed.get(key_fast_flow,0)+1
+                if should_alert(key_fast_flow):
+                    mark_alert(key_fast_flow)
                     alerts.append(f"⚡ 最近15分钟资金流出{fmt_money(cur_out_abs)}，主力突然跑路")
             # 新增：急涨预警，提前发现拉升，别追高（30分钟内涨≥2%就提醒）
             recent_chg = (df_s['close'].iloc[-1] - df_s['close'].iloc[-3]) / df_s['close'].iloc[-3] * 100
             if recent_chg >= 2 and vol_enough:
                 key_rush = f"{coin}_急涨预警"
-                if pushed.get(key_rush,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_rush] = pushed.get(key_rush,0)+1
+                if should_alert(key_rush):
+                    mark_alert(key_rush)
                     alerts.append(f"⚡ 最近30分钟急涨{recent_chg:.1f}%，别追高")
             elif recent_chg <= -2 and vol_enough:
                 key_drop = f"{coin}_急跌预警"
-                if pushed.get(key_drop,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_drop] = pushed.get(key_drop,0)+1
+                if should_alert(key_drop):
+                    mark_alert(key_drop)
                     alerts.append(f"⚡ 最近30分钟急跌{-recent_chg:.1f}%，别恐慌割肉")
             # 新增：RSI超买+第一根上影就提醒，不等连续2根
             if ind_s['rsi'] >=75:
@@ -441,8 +440,8 @@ def monitor_once():
                 upper1 = row1['high'] - max(row1['open'], row1['close'])
                 if upper1 > body1*1.5:
                     key_upper = f"{coin}_上影预警"
-                    if pushed.get(key_upper,0) < MAX_PUSH_PER_SIGNAL:
-                        pushed[key_upper] = pushed.get(key_upper,0)+1
+                    if should_alert(key_upper):
+                        mark_alert(key_upper)
                         alerts.append("⚠️ RSI超买+第一根长上影，上方抛压出来了")
             # 对称：RSI超卖+第一根下影就提醒低吸
             if ind_s['rsi'] <=25:
@@ -451,43 +450,49 @@ def monitor_once():
                 lower1 = min(row1['open'], row1['close']) - row1['low']
                 if lower1 > body1*1.5:
                     key_lower = f"{coin}_下影预警"
-                    if pushed.get(key_lower,0) < MAX_PUSH_PER_SIGNAL:
-                        pushed[key_lower] = pushed.get(key_lower,0)+1
+                    if should_alert(key_lower):
+                        mark_alert(key_lower)
                         alerts.append("🟢 RSI超卖+第一根长下影，超卖低吸机会")
             # KDJ J值极端提醒
             if ind_s['kdj_overbought']:
                 key_kdj_over = f"{coin}_KDJ超买"
-                if pushed.get(key_kdj_over,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_kdj_over] = pushed.get(key_kdj_over,0)+1
+                if should_alert(key_kdj_over):
+                    mark_alert(key_kdj_over)
                     alerts.append(f"⚠️ KDJ J值{ind_s['kdj_j']:.0f}超买，短线别追高")
             if ind_s['kdj_oversold']:
                 key_kdj_under = f"{coin}_KDJ超卖"
-                if pushed.get(key_kdj_under,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_kdj_under] = pushed.get(key_kdj_under,0)+1
+                if should_alert(key_kdj_under):
+                    mark_alert(key_kdj_under)
                     alerts.append(f"🟢 KDJ J值{ind_s['kdj_j']:.0f}超卖，短线有反弹需求")
             # 新增：实时触底反弹预警，不等K线收线，从30分钟最低点反弹1.5%就提醒，超过3%就不提醒
             recent_low_30m = df_s['low'].tail(2).min()
             bounce_from_low = (ind_s['close'] - recent_low_30m) / recent_low_30m * 100
             if 1.5 <= bounce_from_low <= 3:
                 key_bounce = f"{coin}_实时触底反弹"
-                if pushed.get(key_bounce,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_bounce] = pushed.get(key_bounce,0)+1
+                if should_alert(key_bounce):
+                    mark_alert(key_bounce)
                     alerts.append(f"🟢 从30分钟最低点反弹{bounce_from_low:.1f}%，V反初现")
             # 对称：实时见顶回落预警，从30分钟最高点跌1.5%-3%就提醒，超过3%就不提醒
             recent_high_30m = df_s['high'].tail(2).max()
             drop_from_high = (recent_high_30m - ind_s['close']) / recent_high_30m * 100
             if 1.5 <= drop_from_high <= 3:
                 key_drop_top = f"{coin}_实时见顶回落"
-                if pushed.get(key_drop_top,0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key_drop_top] = pushed.get(key_drop_top,0)+1
+                if should_alert(key_drop_top):
+                    mark_alert(key_drop_top)
                     alerts.append(f"🔴 从30分钟最高点回落{drop_from_high:.1f}%，见顶信号")
             if alerts:
                 alert_str = ''.join(alerts)
-                stable_alert = re.sub(r'\d+\.?\d*%', '%', alert_str)
-                key = f"{coin}_{stable_alert}"
-                if pushed.get(key, 0) < MAX_PUSH_PER_SIGNAL:
-                    pushed[key] = pushed.get(key, 0) + 1
-                    alerts_all.append((coin, alerts))
+                # ★ 修 P0-1：原来 key = f"{coin}_{整串报警文本}"（再用正则抹掉百分比）——
+                #   1) 任一条目增删都产生新 key；2) 不同含义的报警会撞成同一个 key。
+                #   现在：**每条报警各自一个值无关的稳定 key**，逐条走冷却判定。
+                fired_this_round = []
+                for one in alerts:
+                    akey = stable_alert_key(coin, one)
+                    if should_alert(akey):
+                        mark_alert(akey)
+                        fired_this_round.append(one)
+                if fired_this_round:
+                    alerts_all.append((coin, fired_this_round))
             # 生成标准报告表格（和full_analysis格式完全一致）
             df_s = ind_s['df']
             today_high = ind_s['today_high']
@@ -535,13 +540,18 @@ def monitor_once():
             lines.append(f"- **现货资金(1h累计)**: {flow1h_text}（{flow1h_judge}）")
             ls_acc_judge = "大户偏空" if top_ratio<0.9 else "大户偏多" if top_ratio>1.1 else "平衡"
             lines.append(f"- **大户持仓多空比**: {top_ratio:.2f}（{ls_acc_judge}）")
-            ls_size_ratio = float(lsd.get('top_lsr_liq', 1.0))
+            # ★ 修字段名：原来是 lsd.get('top_lsr_liq') —— 接口返回的字段叫 **top_lsr_size**，
+            #   取不到就永远落到兜底 1.0，于是"大户账户多空比 1.00（平衡）"是假的。
+            ls_size_ratio = float(lsd.get('top_lsr_size', 1.0) or 1.0)
             ls_size_judge = "明显偏空" if ls_size_ratio<0.5 else "明显偏多" if ls_size_ratio>2 else "平衡"
-            lines.append(f"- **大户账户多空比**: {ls_size_ratio:.2f}（{ls_size_judge}）")
+            lines.append(f"- **大户持仓量多空比**: {ls_size_ratio:.2f}（{ls_size_judge}）")
             taker_ratio = buy_taker/max(sell_taker,1)
             taker_judge = "散户疯狂主动买，追高" if taker_ratio>1.5 else "散户恐慌卖" if taker_ratio<0.7 else "平衡"
             lines.append(f"- **Taker主动买卖比**: {taker_ratio:.2f}（{taker_judge}）")
-            lines.append(f"- **资金费率**: 0.01%（正常）")
+            # ★ 修假数据：原来硬编码 "- **资金费率**: 0.01%（正常）" —— 而 api.get_funding_rate()
+            #   是个恒返回 (0.001, 0) 的占位实现，也就是说这一行**永远是假的**。
+            #   要么接入真实来源，要么如实标注"未接入"，不要给假数字。
+            lines.append("- **资金费率**: 未接入（暂无数据源，请勿参考）")
             upper_judge = "还在拉，没抛压" if upper_count<2 else "上方抛压重"
             lines.append(f"- **连续上影线**: {upper_count}根（{upper_judge}）")
             daily_text = "🟢" if daily_up else "🔴"
@@ -555,16 +565,16 @@ def monitor_once():
             stop_loss = ind_s['boll_l']
             take_profit = ind_s['boll_u']
             daily_judge = "日线向上" if daily_up else "日线向下"
-            if current_signal == "涔板叆":
-                # 浠撲綅寤鸿锛氭棩绾垮悜涓婁拱3鎴愶紝鏃ョ嚎鍚戜笅涔?鎴?
+            if current_signal == "买入":
+                # 仓位建议：日线向上买3成，日线向下买1成
                 if daily_up:
                     pos = "3鎴愪粨"
                 else:
                     pos = "1成轻仓"
                 hold_advice = f"可以买入{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
                 empty_advice = f"可以建仓{pos}，止损{stop_loss:.4f}，止盈{take_profit:.4f}"
-            elif current_signal == "鍗栧嚭":
-                hold_advice = "鍏ㄩ儴姝㈢泩/姝㈡崯鍗栧嚭"
+            elif current_signal == "卖出":
+                hold_advice = "全部止盈/止损卖出"
                 empty_advice = "别买，等回调"
             else:
                 # 综合所有策略维度判断建议，直接给最终唯一结论
@@ -657,7 +667,13 @@ def monitor_once():
         # beep()
 
 if __name__ == "__main__":
-    print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")
+    print(f"启动模块化监测系统{VERSION} {VERSION_DATE}", flush=True)   # flush：重定向到文件时也要立刻可见
+    # 打印单轮成本，避免"看着像没动"（实测单轮 30 秒左右）
+    print(f"[启动] 监测 {len(CURRENCY_PAIRS)} 个币，{CHECK_INTERVAL} 秒一轮；"
+          f"一轮要给每个币拉 15m/1h/4h K线与逐笔成交，通常 20-40 秒，属正常。", flush=True)
+    print(f"[启动] 报警冷却 {ALERT_COOLDOWN_MIN} 分钟（首次必报，条件仍在则按间隔重报，不设上限）", flush=True)
+    print(f"[启动] 推送通道：控制台 + {NOTIFY_FILE} 留痕 + 飞书（未配 FEISHU_WEBHOOK 时飞书自动跳过）", flush=True)
+
     last_backtest_ts = time.time()
     last_day = datetime.now().day
     monitor_once()
@@ -667,7 +683,7 @@ if __name__ == "__main__":
             now_hour = datetime.now().hour
             now_min = datetime.now().minute
             now_day = datetime.now().day
-            # 姣忓ぉ0鐐硅嚜鍔ㄦ竻绌烘帹閫佽褰?
+            # 每天0点自动清空推送记录
             if now_day != last_day:
                 pushed.clear()
                 save_pushed()
@@ -680,7 +696,7 @@ if __name__ == "__main__":
             if now_hour == 23 and now_min >= 50:
                 daily_backtest()
         except Exception as e:
-            print(f"涓诲惊鐜嚭閿? {e}")
+            print(f"主循环出错: {e}", flush=True)
         time.sleep(CHECK_INTERVAL)
 
 

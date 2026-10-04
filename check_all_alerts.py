@@ -1,5 +1,9 @@
 import sys
-sys.path.insert(0, 'crypto_monitor')
+import os
+# 兼容两种放法：核心模块在**同目录**（当前仓库的布局）或在 crypto_monitor/ 子目录里。
+# 原来写死 sys.path.insert(0, 'crypto_monitor')，一旦从别的目录执行就 import 不到。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crypto_monitor'))
 from api import get_kline, get_trades, get_ls, get_flow_1h
 from indicators import get_indicator, get_daily_trend
 from strategy import calc_score

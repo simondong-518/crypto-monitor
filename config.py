@@ -1,4 +1,4 @@
-﻿# ==============================================
+# ==============================================
 # 配置文件：所有参数都在这里改
 # ==============================================
 
@@ -12,8 +12,8 @@ BASE = "https://api.gateio.ws/api/v4"
 CURRENCY_PAIRS = ["CYS_USDT", "SUI_USDT", "WLD_USDT", "BSV_USDT", "DOGE_USDT", "BTC_USDT"]
 
 # Server酱SendKey
-SENDKEY1 = "SCT426961TeNhdBXiVI65DOs1eujHCVu8I"
-SENDKEY2 = "SCT427098TfTBMz8lASeCdUCtqzwAmFACc"
+SENDKEY1 = ""
+SENDKEY2 = ""
 
 # 涨跌幅提醒阈值
 CHG_THRESHOLD = {
@@ -24,8 +24,17 @@ CHG_THRESHOLD = {
 BUY_SCORE_THRESHOLD = 3.5
 SELL_SCORE_THRESHOLD = 3.5
 
-# 每个信号最多推送次数
-MAX_PUSH_PER_SIGNAL = 3
+# ==============================================
+# 报警上报策略：**冷却制**（替代原来的"每个信号最多推 3 次"）
+#
+# 旧配置 MAX_PUSH_PER_SIGNAL = 3 的含义是"每个信号一天最多推 3 次"，
+# 副作用是：一个持续存在的止损/跑路信号在推满 3 次后**当天彻底不再提醒**，
+# 而且界面上看不出来。现在改成冷却时间：首次必报，条件还在就按间隔重报，不设上限。
+# 保留 MAX_PUSH_PER_SIGNAL 只为兼容旧引用（已不再用于判定）。
+# ==============================================
+ALERT_COOLDOWN_MIN = 30          # 同一个报警多久可以重报一次（分钟）
+ALERT_STATE_FILE = "alert_state.json"
+MAX_PUSH_PER_SIGNAL = 3          # 仅兼容旧引用；判定一律走 alert_state 的冷却制
 
 # 监测间隔（秒）
 CHECK_INTERVAL = 60
