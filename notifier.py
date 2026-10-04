@@ -99,3 +99,18 @@ def beep():
     except Exception:
         pass
 
+
+
+# ============================================================
+# 通道清单：给面板/自检用。
+# **只返回名字与"是否启用"，绝不含 webhook / key 等任何值。**
+# ============================================================
+def get_channels():
+    """返回当前可用通道（名字 + 是否启用）。顺序即实际发送顺序。"""
+    import os as _os
+    fw = FEISHU_WEBHOOK or _os.environ.get("FEISHU_WEBHOOK", "")
+    return [
+        {"name": "控制台", "enabled": True},
+        {"name": "文件留痕", "enabled": bool(NOTIFY_FILE)},
+        {"name": "飞书", "enabled": bool(fw)},
+    ]

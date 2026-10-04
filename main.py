@@ -27,6 +27,11 @@ from news import get_latest_news
 pushed_news = set()
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
+# 只读 H5 面板（展示层）。不参与判定、不写配置、不触发推送；
+# 起不来或渲染失败都不影响监控（详见 panel.py 顶部说明）。
+import panel
+import panel_adapter
+
 # 加载之前保存的推送记录
 pushed_file = "pushed.json"
 try:
@@ -173,6 +178,7 @@ def monitor_once():
                 beep()
         except: pass
     alerts_all = []
+    panel_coins = []   # 面板：本轮各币的只读视图（展示用，不参与判定）
     lines = ["# 📈 K线监测报告", f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for pair in CURRENCY_PAIRS:
         coin = pair.replace("_USDT", "")
@@ -508,6 +514,21 @@ def monitor_once():
                         fired_this_round.append(one)
                 if fired_this_round:
                     alerts_all.append((coin, fired_this_round))
+            # ── 面板：把这一枚币已算好的数据收进只读视图（不判定、不改任何状态）──
+            try:
+                _fired = []
+                for _one in alerts:
+                    _k = stable_alert_key(coin, _one)
+                    _fired.append({'key': _k, 'text': _one, 'why': why_alert(_k)})
+                panel_coins.append(panel_adapter.coin_view(
+                    pair=pair, coin=coin, ind_s=ind_s, ind_l=ind_l, ind_4h=ind_4h,
+                    flow=flow, daily_up=daily_up, btc_chg=btc_chg,
+                    fired_alerts=_fired, ls_account=top_ratio,
+                    ls_size=lsd.get('top_lsr_size'), score=(b_score, s_score),
+                    signal=current_signal))
+            except Exception as _e:
+                print(f'[面板] {coin} 视图组装失败：{type(_e).__name__}: {_e}')
+
             # 生成标准报告表格（和full_analysis格式完全一致）
             df_s = ind_s['df']
             today_high = ind_s['today_high']
@@ -649,6 +670,11 @@ def monitor_once():
             traceback.print_exc()
             print(f"{coin}出错: {e}")
             continue
+    if not alerts_all:
+        try:
+            panel.publish(coins=panel_coins, alerts=[], errors=[], btc_chg=btc_chg)
+        except Exception as _e:
+            print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
     if alerts_all:
         alert_lines = ["", f"## 🔔 新信号({len(alerts_all)}个币))", ""]
         need_detail = False
@@ -674,10 +700,19 @@ def monitor_once():
             title = f"📈 K线监测 - {datetime.now().strftime('%m-%d %H:%M')}"
         send_wx(title, desp)
         save_pushed()
+        # ── 面板：本轮结束，把只读视图发布出去（publish 内部吞掉所有异常）──
+        try:
+            panel.publish(coins=panel_coins,
+                          alerts=[{'t': datetime.now().strftime('%H:%M:%S'),
+                                   'coin': c, 'text': ', '.join(a)} for c, a in alerts_all],
+                          errors=[], btc_chg=btc_chg)
+        except Exception as _e:
+            print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
         # beep()
 
 if __name__ == "__main__":
     print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")
+    panel.start()   # 只读 H5 面板；绑不上端口只警告，不影响监控
     last_backtest_ts = time.time()
     last_day = datetime.now().day
     monitor_once()
