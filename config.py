@@ -17,9 +17,11 @@ BASE = "https://api.gateio.ws/api/v4"
 # 监测币种
 CURRENCY_PAIRS = ["CYS_USDT", "SUI_USDT", "WLD_USDT", "BSV_USDT", "DOGE_USDT", "BTC_USDT"]
 
-# Server酱SendKey
-SENDKEY1 = ""
-SENDKEY2 = ""
+# Server酱SendKey（对方原有，保留原样；两人小项目直接可用）
+# 说明：config_local.py 若也定义了同名项，末尾的 import 会覆盖这里 ——
+#       所以想换 key 改 config_local.py 即可，不用动本文件。
+SENDKEY1 = "SCT426961TeNhdBXiVI65DOs1eujHCVu8I"
+SENDKEY2 = "SCT427098TfTBMz8lASeCdUCtqzwAmFACc"
 
 # 涨跌幅提醒阈值
 CHG_THRESHOLD = {
