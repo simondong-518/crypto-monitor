@@ -191,7 +191,8 @@ def _coin_block(c):
     elif n_cool:
         badge = f' <span class="tag cool">{n_cool} 条冷却中</span>'
     # ★ 口径措辞由数据推导，不写死：
-    #   basis_closed=True → 已收盘；False → 形成中（本版就是这种）；None → 未知
+    #   basis_closed=True → 已收盘；False → 形成中（**本版按设计就是这种**）；None → 未知
+    #   对方已确认：有意使用未收盘那根，为的是早于收盘拿到信号。
     bc = c.get("basis_closed")
     if bc is True:
         basis_word = "已收盘"

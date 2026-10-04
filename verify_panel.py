@@ -99,7 +99,8 @@ def main() -> int:
     n_coin_sum = len(re.findall(r"<summary>[A-Z0-9]+/USDT", page))
     left = re.findall(r"\[\[[A-Z]+\]\]", page)
 
-    # 反漂移：图上最后一个点必须**等于**打分用的那个值（同一条公式、同一根已收盘 bar）
+    # 反漂移：图上最后一个点必须**等于**打分用的那个值（同一条公式、同一个基准 bar）
+    # 注：本版基准 bar = iloc[-1]（含未收盘那根，对方确认为有意设计），故断言按末点比。
     drift = []
     for c in st.get("coins") or []:
         ch = c.get("chart") or {}
@@ -116,8 +117,8 @@ def main() -> int:
         ("/api/state 是合法 JSON", isinstance(st, dict)),
         ("首轮已完成（ready）", st.get("ready") is True),
         ("币数与 config 一致", n_coins == want and n_coins > 0),
-        ("每币都有已收盘 K 线时间", all(c.get("bar_time") for c in st.get("coins") or [])),
-        ("每币都有走势图序列（价格/BOLL/RSI/MACD）",
+        ("每币都有 K 线基准时间", all(c.get("bar_time") for c in st.get("coins") or [])),
+        ("每币都有走势图序列（价格/BOLL/RSI/KDJ/MACD）",
          all(len((c.get("chart") or {}).get("close") or []) > 10
              and (c.get("chart") or {}).get("rsi")
              and (c.get("chart") or {}).get("dif")
