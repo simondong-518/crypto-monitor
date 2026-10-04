@@ -190,29 +190,38 @@ def _coin_block(c):
         badge = f' <span class="tag fire">{n_fired} 条本轮上报</span>'
     elif n_cool:
         badge = f' <span class="tag cool">{n_cool} 条冷却中</span>'
+    # ★ 口径措辞由数据推导，不写死：
+    #   basis_closed=True → 已收盘；False → 形成中（本版就是这种）；None → 未知
+    bc = c.get("basis_closed")
+    if bc is True:
+        basis_word = "已收盘"
+    elif bc is False:
+        basis_word = "形成中（未收盘）"
+    else:
+        basis_word = "口径未知"
     rows = [
         ("现价（实时）", f'<b>{fmt(c["price"])}</b>', "Gate 行情最新成交价"),
         ("当日涨跌幅", f'<span class="{"up" if chg>=0 else "down"}">{chg:+.2f}%</span>',
          "实时价 相对 当日 0 点开盘价"),
-        ("指标收盘价", fmt(c["close"]), f'最后一根<b>已收盘</b> K 线（{c["bar_time"]}）'),
+        ("指标基准价", fmt(c["close"]), f'最后一根<b>{basis_word}</b> K 线（{c["bar_time"]}）'),
         ("趋势 MA20", ('🟢 上涨' if c["trend_up"] else '🔴 下跌') + f'　MA20 {fmt(c["ma20"])}',
-         "已收盘 K 线收盘价 vs 20 根均线（本地算）"),
+         f'{basis_word} K 线收盘价 vs 20 根均线（本地算）'),
         ("BOLL 支撑/压力", f'{fmt(c["boll_l"])} / {fmt(c["boll_u"])}',
-         "20 根 ±2σ（本地算，用已收盘 K 线）"),
+         f'20 根 ±2σ（本地算，用{basis_word} K 线）'),
         ("RSI 15m / 1h", f'{fmt(c["rsi_15"],1)} / {fmt(c["rsi_1h"],1)}',
          "14 周期简单均值法（本地算）"),
         ("1h / 4h 趋势", ('🟢' if c["trend_1h"] else '🔴') + ' / ' + ('🟢' if c["trend_4h"] else '🔴'),
          "各自周期收盘价 vs MA20（本地算）"),
         ("日线趋势", '🟢 向上' if c["daily_up"] else '🔴 向下', "日线已收盘 K 线 vs MA20"),
         ("量能", f'{fmt(c["vol_ratio"],2)}× 均量',
-         f'已收盘 K 线量 / 20 根均量（门槛 {getattr(config,"VOL_ENOUGH_MULT",1.2)}×）'),
+         f'{basis_word} K 线量 / 20 根均量（门槛 {getattr(config,"VOL_ENOUGH_MULT",1.2)}×）'),
         ("资金流向（近 100 笔）", f'${fmt(c["net_inflow"],0)}',
          f'主动买 − 主动卖，{c["trades_n"]} 笔（本地算）'),
-        ("大户持仓多空比", fmt(c["ls_size"]), "<code>contract_stats.top_lsr_size</code>（接口直返，仅展示）"),
+        (f"大户持仓量多空比", fmt(c["ls_size"]), "<code>contract_stats.top_lsr_size</code>（接口直返，仅展示）"),
         ("大户账户多空比", fmt(c["ls_account"]),
          f'<code>top_lsr_account</code>（接口直返）·打分口径 {getattr(config,"LS_METRIC","")}'
          + (f' · 分位 {fmt(c["ls_pct"],0)}%' if c["ls_pct"] is not None
-            else f' · 预热中 {c["ls_n"]}/{getattr(config,"LS_MIN_SAMPLES",60)}（预热期不加分）')),
+            else '')),
         ("15m 信号", f'<b>{sig}</b>', f'买分 {fmt(c["buy"],1)} / 卖分 {fmt(c["sell"],1)}　'
                                    f'（阈值 {getattr(config,"BUY_SCORE_THRESHOLD",3.5)}，本地算）'),
     ]
@@ -255,12 +264,15 @@ def _status_block(s):
     err_html = (f'<div class="sec">本轮跳过（取数失败）</div><ul class="errs">'
                 + "".join(f"<li>{e}</li>" for e in errs) + "</ul>") if errs else ""
     btc = "—" if s.get("btc_chg") is None else f'{s["btc_chg"]:+.2f}%'
+    round_note = '　<span class="dim">（首轮进行中）</span>' if not s.get("ready") else ""
+    # 「下轮约」：由**上一轮完成时刻 + 本轮耗时 + 轮询间隔**估算，写明是估算 —— 不假装知道确切时间
+    eta = (datetime.fromtimestamp(nxt_ts).strftime("%H:%M:%S") + "（估）") if nxt_ts else "—"
     return f"""<div class="stat">
-  <div><span class="k">轮次</span><b>第 {s.get("round") or 0} 轮</b>{"" if s.get("ready") else "（首轮进行中）"}</div>
+  <div><span class="k">轮次</span><b>第 {s.get("round") or 0} 轮</b>{round_note}</div>
   <div><span class="k">上一轮耗时</span><b>{fmt(s.get("round_seconds"),1)}s</b>
        <span class="k">轮询间隔</span><b>{s.get("poll") or "—"}s</b></div>
   <div><span class="k">上一轮完成</span><b>{last}</b>
-       <span class="k">下一轮</span><b id="eta">—</b></div>
+       <span class="k">下轮约</span><b>{eta}</b></div>
   <div><span class="k">进程已运行</span><b>{hh}h{mm:02d}m{ss:02d}s</b>
        <span class="k">BTC 今日</span><b>{btc}</b></div>
   <div><span class="k">报警冷却</span><b>{s.get("cooldown_min") or "—"} 分钟</b>

@@ -79,7 +79,8 @@ def coin_view(pair, coin, ind_s, ind_l=None, ind_4h=None, flow=None,
         "day_chg": _n(ind_s.get("day_chg")),
         "close": _n(ind_s.get("close")),
         "bar_time": bar_time,
-        "bar_closed": None,          # 本版未标注该 bar 是否已收盘 → 如实留空
+        # 口径事实：由 panel_chart 从数据推导（True=已收盘 / False=形成中 / None=未知）
+        "basis_closed": (chart or {}).get("basis_closed") if isinstance(chart, dict) else None,
         "trend_up": bool(ind_s.get("trend_up")),
         "ma20": _n(ind_s.get("ma20")),
         "boll_u": _n(ind_s.get("boll_u")),

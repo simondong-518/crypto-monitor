@@ -55,15 +55,32 @@ def series(df, n=N_BARS):
     else:
         dif, dea = _macd[0], _macd[1]
         _macd_hist = (dif - dea) * 2
+
     # ★ 口径：必须和 indicators 打分用的 bar **完全一致**，否则图上的线
-    #   解释不了打分。本版 get_indicator 用的是 iloc[-1]（即**最后一根 bar**，
-    #   实测 is_contract=False，也就是还在形成中的那根），所以这里也用 -1。
+    #   解释不了打分。本版 get_indicator 用的是 iloc[-1]（即**最后一根 bar**；
+    #   Gate 的 is_contract 字段为 false 时代表这根还没收盘），所以这里也用 -1。
     #   注：这个口径本身有问题（形成中 bar 量能只有 0.00~0.34x 均量，
-    #   导致 vol_enough 永远为假、放量类规则不可达），已单独记录为待修项；
+    #   导致 vol_enough 在多数时刻不成立、放量类规则难触发），已单独记录为待修项；
     #   面板只做如实展示，不擅自改口径 —— 否则图会和判定对不上。
     k = len(df) - 1
     end = k + 1
     start = max(0, end - n)
+
+    # 从数据推导"这根到底是不是已收盘"，不写死。
+    # ⚠️ Gate 返回的是**字符串** 'true'/'false'，不是 bool。直接 bool(x) 会把
+    #    'false' 判成 True（非空字符串恒真）—— 必须显式比较字符串，否则口径文案会反过来。
+    basis_closed = None
+    try:
+        if "is_contract" in df.columns:
+            _v = df["is_contract"].iloc[k]
+            if isinstance(_v, str):
+                basis_closed = _v.strip().lower() in ("true", "1", "yes")
+            elif isinstance(_v, bool):
+                basis_closed = _v
+            else:
+                basis_closed = bool(_v)
+    except Exception:
+        basis_closed = None
 
     # 时间列：本版叫 't'（旧版叫 'ts'）—— 两个都认，避免再漂
     tcol = 't' if 't' in df.columns else ('ts' if 'ts' in df.columns else None)
@@ -83,17 +100,31 @@ def series(df, n=N_BARS):
         else:
             hist.append(round(2 * (float(a) - float(b)), 8))   # 国内习惯：MACD柱 = 2×(DIF−DEA)
     ts = [_fmt_ts(df[tcol].iloc[i]) for i in range(start, end)] if tcol else [""] * (end - start)
+    # KDJ：对方新增的指标，且已接入报警（kdj_overbought / kdj_oversold）。
+    # 报表上能看到 J 值超买超卖，但页面上原本没有图，没法核对报警来源 → 补一项。
+    kdj_j = [None] * (end - start)
+    try:
+        from indicators import calc_kdj
+        _kj = calc_kdj(df)
+        # calc_kdj 返回 (K, D, J) 三个 Series；报警判定用的是 J
+        if isinstance(_kj, (tuple, list)) and len(_kj) >= 3:
+            kdj_j = f(_kj[2])
+    except Exception as _e:
+        # 不静默：KDJ 出问题要留痕，否则页面显示 "—" 却查不出原因
+        print(f"[面板] KDJ 计算失败：{type(_e).__name__}: {_e}")
     return {
         "n": end - start,
         "t": ts,
         "tick": [s[6:] if len(s) > 6 else s for s in (ts[0], ts[len(ts) // 2], ts[-1])],
         "close": cl, "boll_u": f(up), "boll_m": f(mid), "boll_l": f(lo),
         "rsi": f(rsi), "dif": f(dif), "dea": f(dea), "macd": hist,
+        "kdj_j": kdj_j,
         "price": float(df['close'].iloc[-1]),                  # 实时价（形成中 bar）
         "bar_time": ts[-1] if ts else "",
-        # ★ 口径注记：本版 indicators 用 df.iloc[-2] 打分（最后一根已收盘 bar），
-        #   所以图上最后一个点用的就是 k = len(df)-2 那一根，与打分口径一致。
-        "is_closed_bar": True,
+        # ★ 口径事实（从数据推导，不写死）：True=已收盘，False=形成中，None=未知。
+        #   页面的措辞由它决定，这样将来口径被修正时，文案自动跟着变，不会再"图文不符"。
+        "basis_closed": basis_closed,
+        "is_closed_bar": basis_closed,
     }
 
 
@@ -105,7 +136,8 @@ def last_values(s):
                 return v
         return None
     return {"close": last(s["close"]), "boll_u": last(s["boll_u"]), "boll_m": last(s["boll_m"]),
-            "rsi": last(s["rsi"]), "dif": last(s["dif"]), "dea": last(s["dea"])}
+            "rsi": last(s["rsi"]), "dif": last(s["dif"]), "dea": last(s["dea"]),
+            "kdj_j": last(s["kdj_j"])}
 
 
 # ─────────────────────────────────────────────── 画图基元
@@ -199,6 +231,24 @@ def pane_rsi(s, line="#58a6ff", warn="#f6c177", dim="#8b949e"):
     return _wrap(inner)
 
 
+def pane_kdj(s, line="#d2a8ff", warn="#f6c177", dim="#8b949e"):
+    """KDJ 子图。只画 J 线 + 0/100 超买超卖参考线。
+
+    为什么画 J 而不是 K/D：报警判定用的就是 J（kdj_overbought = J>=100、
+    kdj_oversold = J<=0），画别的线解释不了报警。J 可以跑到 0~100 之外，
+    所以上下界要从数据取，同时把 0/100 两条线包进来。
+    """
+    vals = [v for v in s["kdj_j"] if v is not None]
+    if not vals:
+        return _wrap(_axis(s["n"]))          # 拿不到就不画，别编
+    lo = min([0.0] + vals) - 10
+    hi = max([100.0] + vals) + 10
+    inner = (_hline(100, lo, hi, warn) + _hline(0, lo, hi, warn)
+             + _hline(50, lo, hi, dim, dash="2 5", w=0.8)
+             + _poly(s["kdj_j"], lo, hi, line, 1.3) + _axis(s["n"]))
+    return _wrap(inner)
+
+
 def pane_macd(s, up="#3fb950", dn="#f85149", dif_c="#58a6ff", dea_c="#f6c177",
               dim="#8b949e"):
     lo, hi = _bounds(s["macd"], s["dif"], s["dea"], pad=0.12)
@@ -230,10 +280,11 @@ def render_chart(coin, s, signal_note=""):
     fmt = _fmt
     span = f'{s["tick"][0]} → {s["tick"][-1]}'
     items = [
-        ("price", "价格", f'{fmt(s["price"])}　已收盘 {fmt(lv["close"])}',
-         pane_price(s)),
+        ("price", "价格", f'{fmt(s["price"])}', pane_price(s)),
         ("boll", "BOLL", f'上 {fmt(lv["boll_u"])} / 中 {fmt(lv["boll_m"])}', pane_boll(s)),
         ("rsi", "RSI(14)", f'{fmt(lv["rsi"], 1)}', pane_rsi(s)),
+        ("kdj", "KDJ(9,3,3) J", f'{fmt(lv["kdj_j"], 1)}',
+         pane_kdj(s)),
         ("macd", "MACD(12,26,9)",
          f'DIF {fmt(lv["dif"], 4)} / DEA {fmt(lv["dea"], 4)} / 柱 {fmt(s["macd"][-1], 4)}',
          pane_macd(s)),

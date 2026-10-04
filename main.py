@@ -74,7 +74,10 @@ def analyze_trades(trades):
         v = float(t['amount']) * float(t['price'])
         if t['side'] == 'buy': buy_v += v
         else: sell_v += v
-    return {"buy_volume": buy_v, "sell_volume": sell_v, "net_inflow": buy_v - sell_v}
+    # 追加 n（成交笔数）：只用于**显示**，不参与任何判定 ——
+    # 原来没这个字段，面板上"资金流向 N 笔"就一直是 None。
+    return {"buy_volume": buy_v, "sell_volume": sell_v,
+            "net_inflow": buy_v - sell_v, "n": len(trades)}
 
 # 动态更新当日有效高低点
 def update_daily_extreme(pair, df, avg_vol):
@@ -137,6 +140,7 @@ def update_daily_extreme(pair, df, avg_vol):
     return DAILY_EXTREME["high"][coin], DAILY_EXTREME["low"][coin]
 
 def monitor_once():
+    _round_t0 = time.time()      # 面板显示"上一轮耗时"用（纯展示）
     btc_chg = get_btc_chg()
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
@@ -672,7 +676,8 @@ def monitor_once():
             continue
     if not alerts_all:
         try:
-            panel.publish(coins=panel_coins, alerts=[], errors=[], btc_chg=btc_chg)
+            panel.publish(coins=panel_coins, alerts=[], errors=[], btc_chg=btc_chg,
+                          duration=time.time() - _round_t0)
         except Exception as _e:
             print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
     if alerts_all:
@@ -705,7 +710,8 @@ def monitor_once():
             panel.publish(coins=panel_coins,
                           alerts=[{'t': datetime.now().strftime('%H:%M:%S'),
                                    'coin': c, 'text': ', '.join(a)} for c, a in alerts_all],
-                          errors=[], btc_chg=btc_chg)
+                          errors=[], btc_chg=btc_chg,
+                          duration=time.time() - _round_t0)
         except Exception as _e:
             print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
         # beep()
