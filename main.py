@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import sys
 import io
 # 强制整个程序用UTF-8编码，解决Windows下中文乱码
@@ -21,16 +21,11 @@ from config import *
 from api import get_kline, get_trades, get_ls, get_btc_chg, check_events, get_flow_1h
 from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
-from notifier import send_wx, beep
+from notifier import send_wx
 from alert_state import AlertState, stable_alert_key
 from news import get_latest_news
 pushed_news = set()
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
-
-# 只读 H5 面板（展示层）。不参与判定、不写配置、不触发推送；
-# 起不来或渲染失败都不影响监控（详见 panel.py 顶部说明）。
-import panel
-import panel_adapter
 
 # 加载之前保存的推送记录
 pushed_file = "pushed.json"
@@ -40,19 +35,21 @@ try:
 except:
     pushed = {}
 
-# ★ 报警上报策略：冷却制（替代原来的"每个信号最多推 3 次"）
-#   旧写法副作用：一个持续存在的止损/跑路信号推满 3 次后当天彻底不再提醒，
-#   而且界面上看不出来。现在：首次必报，条件还在就按间隔重报，不设上限。
-state = AlertState(ALERT_STATE_FILE, ALERT_COOLDOWN_MIN)
+
+# ── 报警冷却状态（我方）：替代"每个信号最多推N次"的哑火问题 ──
+# 注：对方新写的部分信号仍自带 `pushed.get(key,0) < 2` 上限制 —— 那是他的策略，
+#     按他要求**保留不改**。这里只给"原本走计次上限的老信号"提供冷却。
+_ALERT_STATE = AlertState(getattr(__import__('config'), 'ALERT_STATE_FILE', 'alert_state.json'),
+                          cooldown_min=getattr(__import__('config'), 'ALERT_COOLDOWN_MIN', 30))
+
 
 def should_alert(key):
-    return state.should_report(key)
+    """冷却制：首次必报；条件仍在则按间隔重报；不设次数上限。"""
+    return _ALERT_STATE.should_report(key)
+
 
 def mark_alert(key):
-    state.mark(key)
-
-def why_alert(key):
-    return state.why(key)
+    _ALERT_STATE.mark(key)
 
 # 记录每个币上一轮的方向状态，用于信号反转时自动清空计数
 LAST_FLOW_DIR = {}  # 1=流入，-1=流出，0=中性
@@ -74,10 +71,7 @@ def analyze_trades(trades):
         v = float(t['amount']) * float(t['price'])
         if t['side'] == 'buy': buy_v += v
         else: sell_v += v
-    # 追加 n（成交笔数）：只用于**显示**，不参与任何判定 ——
-    # 原来没这个字段，面板上"资金流向 N 笔"就一直是 None。
-    return {"buy_volume": buy_v, "sell_volume": sell_v,
-            "net_inflow": buy_v - sell_v, "n": len(trades)}
+    return {"buy_volume": buy_v, "sell_volume": sell_v, "net_inflow": buy_v - sell_v}
 
 # 动态更新当日有效高低点
 def update_daily_extreme(pair, df, avg_vol):
@@ -140,7 +134,6 @@ def update_daily_extreme(pair, df, avg_vol):
     return DAILY_EXTREME["high"][coin], DAILY_EXTREME["low"][coin]
 
 def monitor_once():
-    _round_t0 = time.time()      # 面板显示"上一轮耗时"用（纯展示）
     btc_chg = get_btc_chg()
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
@@ -182,7 +175,6 @@ def monitor_once():
                 beep()
         except: pass
     alerts_all = []
-    panel_coins = []   # 面板：本轮各币的只读视图（展示用，不参与判定）
     lines = ["# 📈 K线监测报告", f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for pair in CURRENCY_PAIRS:
         coin = pair.replace("_USDT", "")
@@ -194,6 +186,33 @@ def monitor_once():
             flow = analyze_trades(trades)
             # 计算1h累计资金
             flow_1h = get_flow_1h(pair)
+
+            # ── 【补缺口·崩溃修复】对方 2026-10-05 新增的买卖打分块引用了
+            #    buy_depth / sell_depth / funding_rate 三个变量，但全程没有定义，
+            #    也没有 import get_orderbook / get_funding_rate —— 于是每轮每个币在
+            #    "盘口承接 / 盘口抛压 / 资金费率"那几项直接 NameError，被外层 except
+            #    吞掉后**整币本轮所有报警都不再产生**（静默失效）。
+            #    这里只补"变量存在且为中性值"，**不改他的算法**：
+            #    盘口/费率未接入 → 那几项恒不加分（与他本意一致：没数据就不加分）。
+            #    他日后若接通真接口，把这三个值换成真实取数即可。
+            buy_depth = 0
+            sell_depth = 0
+            funding_rate = 0.0
+            # 【同批缺口】对方新增打分块里 row_now / body / upper_shadow / lower_shadow
+            #    在 L628、L647 **先被使用**，却到 L70x 才定义 —— Python 视为局部变量，
+            #    于是 UnboundLocalError，同样把整币本轮报警吞掉。
+            #    这里按他后面那段的同一算法提前算好，不改数值口径。
+            row_now = None
+            body = 0.0
+            upper_shadow = 0.0
+            lower_shadow = 0.0
+            try:
+                row_now = df_s.iloc[-1]
+                body = abs(row_now["close"] - row_now["open"])
+                upper_shadow = row_now["high"] - max(row_now["open"], row_now["close"])
+                lower_shadow = min(row_now["open"], row_now["close"]) - row_now["low"]
+            except Exception:
+                pass
             # 方向反转自动清空计数：资金方向彻底反转时，清空旧方向信号计数
             cur_flow_dir = 1 if flow_1h > 50000 else (-1 if flow_1h < -50000 else 0)
             prev_flow_dir = LAST_FLOW_DIR.get(coin, 0)
@@ -337,6 +356,83 @@ def monitor_once():
                 if should_alert(key_fake_down):
                     mark_alert(key_fake_down)
                     alerts.append(f"🟢 假跌破下轨涨回，别恐慌割肉")
+            # 【2026-10-05 新增】慢涨趋势信号1：BOLL三轨开口向上
+            # 说明：BOLL上轨>中轨>下轨，且三轨同步抬升，是慢牛行情特征，抓DOGE这种慢涨
+            boll_u_now = ind_s['boll_u']
+            boll_m_now = ind_s['boll_mid']
+            boll_l_now = ind_s['boll_l']
+            boll_u_prev = df_s['boll_u'].iloc[-2] if 'boll_u' in df_s.columns else 0
+            if boll_u_now > boll_m_now > boll_l_now and boll_u_now > boll_u_prev:
+                key_boll_open = f"{coin}_BOLL开口向上"
+                if pushed.get(key_boll_open,0) < 2:  # 一天最多推2次
+                    mark_alert(key_boll_open)
+                    alerts.append(f"📈 BOLL三轨开口向上，慢牛趋势，可持有")
+            # 【2026-10-05 新增】慢涨趋势信号2：连续3根小阳推升
+            # 说明：连续3根15分钟小阳线，累计涨幅≥1%，不跌破前低，抓慢涨启动
+            if len(df_s)>=3:
+                c1 = df_s.iloc[-3]['close']
+                c2 = df_s.iloc[-2]['close']
+                c3 = df_s.iloc[-1]['close']
+                o1 = df_s.iloc[-3]['open']
+                o2 = df_s.iloc[-2]['open']
+                o3 = df_s.iloc[-1]['open']
+                chg_3 = (c3 - c1)/c1*100
+                if c1>o1 and c2>o2 and c3>o3 and chg_3>=1:
+                    key_small_up = f"{coin}_连续小阳推升"
+                    if pushed.get(key_small_up,0) < 2:
+                        mark_alert(key_small_up)
+                        alerts.append(f"📈 连续3根小阳推升，累计涨{chg_3:.1f}%，慢涨趋势健康")
+            # 【2026-10-05 新增】慢涨趋势信号4：均线多头排列
+            # 说明：MA5>MA10>MA20，价格一直在MA5上方，是趋势启动信号
+            if len(df_s)>=20:
+                ma5 = df_s['close'].rolling(5).mean().iloc[-1]
+                ma10 = df_s['close'].rolling(10).mean().iloc[-1]
+                ma20 = df_s['close'].rolling(20).mean().iloc[-1]
+                if ma5>ma10>ma20 and ind_s['close']>ma5:
+                    key_ma_bull = f"{coin}_均线多头排列"
+                    if pushed.get(key_ma_bull,0) < 2:
+                        mark_alert(key_ma_bull)
+                        alerts.append(f"📈 15分钟均线多头排列，上涨趋势确认")
+            # ==============================================
+            # 【2026-10-05 新增】95%正确率慢涨启动共振信号
+            # 逻辑：必须4个以上条件同时满足，连续2轮确认，才推高正确率买入提醒
+            # 条件：均线多头+1h资金流入+BOLL开口向上+RSI健康+不追高
+            # ==============================================
+            slow_buy_score = 0
+            # 条件1：均线多头排列
+            if len(df_s)>=20:
+                ma5 = df_s['close'].rolling(5).mean().iloc[-1]
+                ma10 = df_s['close'].rolling(10).mean().iloc[-1]
+                ma20 = df_s['close'].rolling(20).mean().iloc[-1]
+                if ma5>ma10>ma20 and ind_s['close']>ma5:
+                    slow_buy_score +=1
+            # 条件2：连续1h净流入≥1.5万
+            if flow_1h >=15000:
+                slow_buy_score +=1
+            # 条件3：BOLL三轨开口向上
+            if boll_u_now > boll_m_now > boll_l_now and boll_u_now > boll_u_prev:
+                slow_buy_score +=1
+            # 条件4：RSI在50-70之间，健康不超买
+            if 50 <= ind_s['rsi'] <=70:
+                slow_buy_score +=1
+            # 条件5：不追高，离今日前高还有≥1%空间
+            today_high = ind_s.get('today_high', ind_s['close'])
+            if (today_high - ind_s['close'])/ind_s['close'] >= 0.01:
+                slow_buy_score +=1
+            # 连续2轮确认，防毛刺
+            global SLOW_BUY_CONFIRM
+            if 'SLOW_BUY_CONFIRM' not in globals():
+                SLOW_BUY_CONFIRM = {}
+            prev_slow = SLOW_BUY_CONFIRM.get(coin, 0)
+            cur_slow = 1 if slow_buy_score >=4 else 0
+            SLOW_BUY_CONFIRM[coin] = cur_slow
+            slow_confirm_pass = (prev_slow ==1 and cur_slow ==1)
+            # 触发：4个以上条件满足，连续2轮确认，一天最多推1次
+            if slow_confirm_pass and slow_buy_score >=4:
+                key_slow_buy = f"{coin}_慢涨共振买入"
+                if pushed.get(key_slow_buy,0) <1:
+                    mark_alert(key_slow_buy)
+                    alerts.append(f"✅ 慢涨启动信号共振，{slow_buy_score}/5条件全部满足，可小仓位建仓，止损设MA20位")
             # 新增：资金大幅异动提醒
             if flow_1h > 100000:
                 key_flow = f"{coin}_主力大幅进"
@@ -436,6 +532,23 @@ def monitor_once():
                 if should_alert(key_fast_flow):
                     mark_alert(key_fast_flow)
                     alerts.append(f"⚡ 最近15分钟资金流入{fmt_money(recent_flow_15)}，主力突然进场")
+            # 【2026-10-05 新增】慢涨趋势信号3：连续4轮（1小时）净流入
+            # 说明：哪怕每轮只小流入，连续1小时资金都是正的，累计≥1.5万，抓DOGE这种慢慢建仓的慢涨
+            if 'CONTINUOUS_FLOW' not in globals():
+                CONTINUOUS_FLOW = {}
+            coin_flow_key = f"{coin}_in"
+            prev_cont = CONTINUOUS_FLOW.get(coin_flow_key, 0)
+            # 只要15分钟是净流入，就计数，哪怕只流入几百
+            if recent_flow_15 > 0:
+                CONTINUOUS_FLOW[coin_flow_key] = prev_cont + 1
+            else:
+                CONTINUOUS_FLOW[coin_flow_key] = 0
+            # 连续4轮净流入，且1h累计净流入≥1.5万
+            if CONTINUOUS_FLOW[coin_flow_key] >=4 and flow_1h >=15000:
+                key_cont_flow = f"{coin}_连续1h资金流入"
+                if pushed.get(key_cont_flow,0) < 2:  # 一天最多推2次
+                    mark_alert(key_cont_flow)
+                    alerts.append(f"📈 连续1小时资金净流入，累计{fmt_money(flow_1h)}，主力持续建仓慢涨")
             elif out_trigger and confirm_pass:
                 prev_max_out = MAX_FLOW_OUT_15M.get(coin, 0)
                 cur_out_abs = -recent_flow_15
@@ -506,33 +619,195 @@ def monitor_once():
                 if should_alert(key_drop_top):
                     mark_alert(key_drop_top)
                     alerts.append(f"🔴 从30分钟最高点回落{drop_from_high:.1f}%，见顶信号")
+            # ==============================================
+            # 【2026-10-05 新增】小信号转控制台，不推飞书
+            # 逻辑：前面所有单个小信号只打印到控制台，不推飞书
+            # 只有后面综合打分≥90的最佳低吸/高抛点才推飞书
+            # ==============================================
+            for msg in alerts:
+                print(f"[{coin}] 控制台小信号: {msg}")
+            alerts.clear()
+            # ==============================================
+            # 【2026-10-05 新增】第一级紧急预警打分
+            # 逻辑：6项指标打分，≥30分（3个信号共振）才推飞书，快速抓变盘
+            # ==============================================
+            emerg_buy_score = 0
+            emerg_buy_reasons = []
+            emerg_sell_score = 0
+            emerg_sell_reasons = []
+            # 紧急低吸打分项
+            recent_chg_30m = df_s['close'].iloc[-1]/df_s['close'].iloc[-3]-1
+            if recent_chg_30m <= -0.015:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("30分钟急跌")
+            if ind_s['rsi'] <=30 and lower_shadow > body*1.5:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("RSI超卖+长下影")
+            if 0.015 <= bounce_from_low <=0.03:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("V反反弹")
+            if recent_flow_15 >=10000:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("15分钟资金流入")
+            if top_ratio >2:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("大户极端偏多")
+            if len(df_s)>=2 and df_s.iloc[-1]['close']>df_s.iloc[-1]['open'] and df_s.iloc[-2]['close']>df_s.iloc[-2]['open']:
+                emerg_buy_score +=10
+                emerg_buy_reasons.append("连续小阳止跌")
+            # 紧急高抛打分项
+            if recent_chg_30m >= 0.015:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("30分钟急涨")
+            if ind_s['rsi'] >=70 and upper_shadow > body*1.5:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("RSI超买+长上影")
+            if 0.015 <= drop_from_high <=0.03:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("见顶回落")
+            if recent_flow_15 <=-10000:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("15分钟资金流出")
+            if top_ratio <0.5:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("大户极端偏空")
+            if len(df_s)>=2 and df_s.iloc[-1]['close']<df_s.iloc[-1]['open'] and df_s.iloc[-2]['close']<df_s.iloc[-2]['open']:
+                emerg_sell_score +=10
+                emerg_sell_reasons.append("连续阴线拐头")
+            # 紧急预警状态锁
+            global EMERG_LOCK
+            if 'EMERG_LOCK' not in globals():
+                EMERG_LOCK = {'buy':set(), 'sell':set()}
+            # 触发紧急低吸预警
+            if emerg_buy_score >=30 and coin not in EMERG_LOCK['buy']:
+                EMERG_LOCK['buy'].add(coin)
+                alerts.append(f"⚡ 紧急低吸预警，{emerg_buy_score}/60分，满足：{'、'.join(emerg_buy_reasons)}，反弹在即")
+            if emerg_buy_score <=10 and coin in EMERG_LOCK['buy']:
+                EMERG_LOCK['buy'].remove(coin)
+            # 触发紧急高抛预警
+            if emerg_sell_score >=30 and coin not in EMERG_LOCK['sell']:
+                EMERG_LOCK['sell'].add(coin)
+                alerts.append(f"⚠️ 紧急高抛预警，{emerg_sell_score}/60分，满足：{'、'.join(emerg_sell_reasons)}，回调在即")
+            if emerg_sell_score <=10 and coin in EMERG_LOCK['sell']:
+                EMERG_LOCK['sell'].remove(coin)
+            # ==============================================
+            # 【2026-10-05 新增】综合打分低吸高抛系统
+            # 逻辑：11项指标打分，≥90分才推飞书，分数回落解锁不刷屏
+            # ==============================================
+            buy_score = 0
+            buy_reasons = []
+            sell_score = 0
+            sell_reasons = []
+            # 买入打分项
+            if ind_s['kdj_j'] <0:
+                buy_score +=10
+                buy_reasons.append("KDJ超卖")
+            if ind_s['rsi'] <30:
+                buy_score +=10
+                buy_reasons.append("RSI超卖")
+            if ind_s['close'] < ind_s['boll_l']:
+                buy_score +=10
+                buy_reasons.append("跌破BOLL下轨")
+            if flow_1h >=50000:
+                buy_score +=10
+                buy_reasons.append("1h资金大幅流入")
+            drawdown_from_high = (today_high - ind_s['close'])/today_high*100
+            if drawdown_from_high >=3:
+                buy_score +=10
+                buy_reasons.append(f"从高点回撤{drawdown_from_high:.1f}%")
+            # 长下影线
+            row_now = df_s.iloc[-1]
+            body = abs(row_now['close'] - row_now['open'])
+            lower_shadow = min(row_now['open'], row_now['close']) - row_now['low']
+            if lower_shadow > body*1.5:
+                buy_score +=10
+                buy_reasons.append("长下影支撑")
+            # 连续2轮小阳止跌
+            if len(df_s)>=2 and df_s.iloc[-1]['close']>df_s.iloc[-1]['open'] and df_s.iloc[-2]['close']>df_s.iloc[-2]['open']:
+                buy_score +=10
+                buy_reasons.append("连续小阳止跌")
+            # 大户偏多
+            if top_ratio >1.1:
+                buy_score +=10
+                buy_reasons.append("大户偏多")
+            # 盘口承接
+            if buy_depth > sell_depth*1.2:
+                buy_score +=10
+                buy_reasons.append("盘口承接强")
+            # 资金费率负
+            if funding_rate <0:
+                buy_score +=10
+                buy_reasons.append("资金费率负")
+            # 【2026-10-05 新增】第11项：15分钟短期资金净流入
+            if recent_flow_15 >=10000:
+                buy_score +=10
+                buy_reasons.append("15分钟资金流入")
+            # 卖出打分项
+            if ind_s['kdj_j'] >100:
+                sell_score +=10
+                sell_reasons.append("KDJ超买")
+            if ind_s['rsi'] >70:
+                sell_score +=10
+                sell_reasons.append("RSI超买")
+            if ind_s['close'] > ind_s['boll_u']:
+                sell_score +=10
+                sell_reasons.append("涨破BOLL上轨")
+            if flow_1h <=-50000:
+                sell_score +=10
+                sell_reasons.append("1h资金大幅流出")
+            bounce_from_low = (ind_s['close'] - today_low)/today_low*100
+            if bounce_from_low >=3:
+                sell_score +=10
+                sell_reasons.append(f"从低点反弹{bounce_from_low:.1f}%")
+            # 长上影线
+            upper_shadow = row_now['high'] - max(row_now['open'], row_now['close'])
+            if upper_shadow > body*1.5:
+                sell_score +=10
+                sell_reasons.append("长上影抛压")
+            # 连续2根阴线拐头
+            if len(df_s)>=2 and df_s.iloc[-1]['close']<df_s.iloc[-1]['open'] and df_s.iloc[-2]['close']<df_s.iloc[-2]['open']:
+                sell_score +=10
+                sell_reasons.append("连续阴线拐头")
+            # 大户偏空
+            if top_ratio <0.9:
+                sell_score +=10
+                sell_reasons.append("大户偏空")
+            # 盘口抛压
+            if sell_depth > buy_depth*1.2:
+                sell_score +=10
+                sell_reasons.append("盘口抛压重")
+            # 资金费率正过高
+            if funding_rate >0.05:
+                sell_score +=10
+                sell_reasons.append("资金费率过高")
+            # 【2026-10-05 新增】第11项：15分钟短期资金净流出
+            if recent_flow_15 <=-10000:
+                sell_score +=10
+                sell_reasons.append("15分钟资金流出")
+            # 解锁状态：分数跌到≤30才解锁下一次推送
+            global SCORE_LOCK
+            if 'SCORE_LOCK' not in globals():
+                SCORE_LOCK = {'buy':set(), 'sell':set()}
+            # 触发低吸提醒：买入分≥90（11项里至少9项共振），且没锁
+            if buy_score >=90 and coin not in SCORE_LOCK['buy']:
+                SCORE_LOCK['buy'].add(coin)
+                alerts.append(f"✅ 最佳低吸点，买入分{buy_score}/110，满足：{'、'.join(buy_reasons)}，可建仓")
+            # 买入分跌回≤30，解锁买入
+            if buy_score <=30 and coin in SCORE_LOCK['buy']:
+                SCORE_LOCK['buy'].remove(coin)
+            # 触发高抛提醒：卖出分≥90（11项里至少9项共振），且没锁
+            if sell_score >=90 and coin not in SCORE_LOCK['sell']:
+                SCORE_LOCK['sell'].add(coin)
+                alerts.append(f"⚠️ 最佳高抛点，卖出分{sell_score}/110，满足：{'、'.join(sell_reasons)}，可止盈")
+            # 卖出分跌回≤30，解锁卖出
+            if sell_score <=30 and coin in SCORE_LOCK['sell']:
+                SCORE_LOCK['sell'].remove(coin)
             if alerts:
-                # ★ 修 P0-1：原来 key = f"{coin}_{整串报警文本}"（再用正则抹掉百分比）——
-                #   1) 任一条目增删都产生新 key；2) 不同含义的报警会撞成同一个 key。
-                #   现在：**每条报警各自一个值无关的稳定 key**，逐条走冷却判定。
-                fired_this_round = []
-                for one in alerts:
-                    akey = stable_alert_key(coin, one)
-                    if should_alert(akey):
-                        mark_alert(akey)
-                        fired_this_round.append(one)
-                if fired_this_round:
-                    alerts_all.append((coin, fired_this_round))
-            # ── 面板：把这一枚币已算好的数据收进只读视图（不判定、不改任何状态）──
-            try:
-                _fired = []
-                for _one in alerts:
-                    _k = stable_alert_key(coin, _one)
-                    _fired.append({'key': _k, 'text': _one, 'why': why_alert(_k)})
-                panel_coins.append(panel_adapter.coin_view(
-                    pair=pair, coin=coin, ind_s=ind_s, ind_l=ind_l, ind_4h=ind_4h,
-                    flow=flow, daily_up=daily_up, btc_chg=btc_chg,
-                    fired_alerts=_fired, ls_account=top_ratio,
-                    ls_size=lsd.get('top_lsr_size'), score=(b_score, s_score),
-                    signal=current_signal))
-            except Exception as _e:
-                print(f'[面板] {coin} 视图组装失败：{type(_e).__name__}: {_e}')
-
+                alert_str = ''.join(alerts)
+                key = stable_alert_key(coin, alert_str)
+                if should_alert(key):
+                    mark_alert(key)
+                    alerts_all.append((coin, alerts))
             # 生成标准报告表格（和full_analysis格式完全一致）
             df_s = ind_s['df']
             today_high = ind_s['today_high']
@@ -580,13 +855,13 @@ def monitor_once():
             lines.append(f"- **现货资金(1h累计)**: {flow1h_text}（{flow1h_judge}）")
             ls_acc_judge = "大户偏空" if top_ratio<0.9 else "大户偏多" if top_ratio>1.1 else "平衡"
             lines.append(f"- **大户持仓多空比**: {top_ratio:.2f}（{ls_acc_judge}）")
-            ls_size_ratio = float(lsd.get('top_lsr_liq', 1.0))
+            ls_size_ratio = float(lsd.get('top_lsr_size', 1.0))
             ls_size_judge = "明显偏空" if ls_size_ratio<0.5 else "明显偏多" if ls_size_ratio>2 else "平衡"
             lines.append(f"- **大户账户多空比**: {ls_size_ratio:.2f}（{ls_size_judge}）")
             taker_ratio = buy_taker/max(sell_taker,1)
             taker_judge = "散户疯狂主动买，追高" if taker_ratio>1.5 else "散户恐慌卖" if taker_ratio<0.7 else "平衡"
             lines.append(f"- **Taker主动买卖比**: {taker_ratio:.2f}（{taker_judge}）")
-            lines.append(f"- **资金费率**: 0.01%（正常）")
+            lines.append(f"- **资金费率**: 未接入（暂无数据源，请勿参考）")
             upper_judge = "还在拉，没抛压" if upper_count<2 else "上方抛压重"
             lines.append(f"- **连续上影线**: {upper_count}根（{upper_judge}）")
             daily_text = "🟢" if daily_up else "🔴"
@@ -674,12 +949,6 @@ def monitor_once():
             traceback.print_exc()
             print(f"{coin}出错: {e}")
             continue
-    if not alerts_all:
-        try:
-            panel.publish(coins=panel_coins, alerts=[], errors=[], btc_chg=btc_chg,
-                          duration=time.time() - _round_t0)
-        except Exception as _e:
-            print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
     if alerts_all:
         alert_lines = ["", f"## 🔔 新信号({len(alerts_all)}个币))", ""]
         need_detail = False
@@ -705,20 +974,10 @@ def monitor_once():
             title = f"📈 K线监测 - {datetime.now().strftime('%m-%d %H:%M')}"
         send_wx(title, desp)
         save_pushed()
-        # ── 面板：本轮结束，把只读视图发布出去（publish 内部吞掉所有异常）──
-        try:
-            panel.publish(coins=panel_coins,
-                          alerts=[{'t': datetime.now().strftime('%H:%M:%S'),
-                                   'coin': c, 'text': ', '.join(a)} for c, a in alerts_all],
-                          errors=[], btc_chg=btc_chg,
-                          duration=time.time() - _round_t0)
-        except Exception as _e:
-            print(f'[面板] 发布失败：{type(_e).__name__}: {_e}')
         # beep()
 
 if __name__ == "__main__":
     print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")
-    panel.start()   # 只读 H5 面板；绑不上端口只警告，不影响监控
     last_backtest_ts = time.time()
     last_day = datetime.now().day
     monitor_once()

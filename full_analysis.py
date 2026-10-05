@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, 'crypto_monitor')
+sys.path.insert(0, '.')
 from api import get_kline, get_trades, get_ls, get_btc_chg, get_flow_1h
 from indicators import get_indicator, get_daily_trend
 
