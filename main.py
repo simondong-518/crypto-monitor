@@ -635,7 +635,13 @@ def monitor_once():
             # 逻辑：前面所有单个小信号只打印到控制台，不推飞书
             # 只有后面综合打分≥90的最佳低吸/高抛点才推飞书
             # ==============================================
-            for msg in alerts:
+            # ★ 我方补充（不动他的逻辑）：原来这里 alerts.clear() 把小信号
+            #   直接丢掉了，用户就没法"想推的时候推"。现在改成**留下来**，
+            #   由 small_signal_switch 决定要不要一起发：
+            #     关（默认）= 和原来完全一样，只有 ≥90 的关键点推
+            #     开        = 这些小信号也一起推（用户要的"触发即上报"）
+            small_alerts = list(alerts)      # 留一份，先不丢
+            for msg in small_alerts:
                 print(f"[{coin}] 控制台小信号: {msg}")
             alerts.clear()
             # ==============================================
@@ -819,6 +825,26 @@ def monitor_once():
                 if should_alert(key):
                     mark_alert(key)
                     alerts_all.append((coin, alerts))
+
+            # ── 小信号（开关打开时才加进来）─────────────────
+            # 默认关 → 行为和对方的设计完全一致（只有 ≥90 的关键点推）。
+            # 打开后 → 这些"只打控制台"的小信号也进发送队列。
+            # 注意：它们各自也走冷却，不会因为打开开关就每轮刷屏。
+            if small_alerts:
+                try:
+                    import small_signal_switch
+                    if small_signal_switch.is_enabled():
+                        kept = []
+                        for msg in small_alerts:
+                            k2 = stable_alert_key(coin, msg)
+                            if should_alert(k2):
+                                mark_alert(k2)
+                                kept.append(msg)
+                        if kept:
+                            alerts_all.append((coin, kept))
+                except Exception as _se:
+                    print(f"[小信号] 开关读取失败，按关闭处理："
+                          f"{type(_se).__name__}: {_se}", flush=True)
             # 生成标准报告表格（和full_analysis格式完全一致）
             df_s = ind_s['df']
             today_high = ind_s['today_high']

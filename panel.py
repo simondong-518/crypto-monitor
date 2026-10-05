@@ -72,6 +72,15 @@ def _key_info_block(s):
             f'　　用量：{body}')
 
 
+def _small_state():
+    """「小信号也推」开关状态（只读）。"""
+    try:
+        import small_signal_switch as sss
+        return sss.get_state()
+    except Exception:
+        return {"enabled": False, "changed_at": None, "changed_by": None}
+
+
 def _key_state():
     """API key 轮换用量（只读，给页面看"额度分摊得怎么样"）。"""
     try:
@@ -191,6 +200,7 @@ def publish(coins, alerts, errors, duration=None, btc_chg=None):
                 "poll": getattr(config, "CHECK_INTERVAL", 60),
                 "pairs": len(getattr(config, "CURRENCY_PAIRS", [])),
                 "push": _push_state(),
+                "small": _small_state(),
                 "keys": _key_state(),
             })
         return _seq
@@ -400,6 +410,8 @@ def render_page():
                .replace("[[COINS]]", body)
                .replace("[[ALERTS]]", _alerts_block(s))
                .replace("[[KEYINFO]]", _key_info_block(s))
+               .replace("[[SMALL_JSON]]", json.dumps(s.get("small") or {"enabled": False},
+                                                     ensure_ascii=False, default=str))
                .replace("[[PUSH_JSON]]", json.dumps(s.get("push") or {"enabled": False},
                                                      ensure_ascii=False, default=str))
                .replace("[[REFRESH]]", str(getattr(config, "PANEL_REFRESH_SEC", 10))))
@@ -462,11 +474,41 @@ class Handler(BaseHTTPRequestHandler):
         开关是**服务端状态**，所以任何设备点一下，所有设备都会看到同一个结果。
         """
         path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
-        if path not in ("/api/push", "/api/push/toggle", "/api/push/on", "/api/push/off"):
+        if path not in ("/api/push", "/api/push/toggle", "/api/push/on", "/api/push/off",
+                        "/api/small", "/api/small/toggle"):
             self._send(404, b"not found", "text/plain; charset=utf-8")
             return
         try:
             import push_switch
+            if path.startswith("/api/small"):
+                # 「小信号也推」开关（与总闸独立）
+                import small_signal_switch as sss
+                if path.endswith("/toggle"):
+                    st = sss.toggle(by="web")
+                else:
+                    want_s = None
+                    try:
+                        n2 = int(self.headers.get("Content-Length") or 0)
+                        if 0 < n2 <= 4096:
+                            b2 = self.rfile.read(n2)
+                            c2 = (self.headers.get("Content-Type") or "").lower()
+                            if "json" in c2 or b2.lstrip()[:1] in (b"{", b"["):
+                                want_s = json.loads(b2.decode("utf-8")).get("enabled")
+                            else:
+                                q2 = urllib.parse.parse_qs(b2.decode("utf-8", "ignore"))
+                                v2 = (q2.get("enabled") or [""])[0].lower()
+                                want_s = True if v2 in ("1", "true", "on", "yes") else \
+                                         (False if v2 in ("0", "false", "off", "no") else None)
+                    except Exception:
+                        want_s = None
+                    st = sss.set_enabled(want_s if isinstance(want_s, bool)
+                                         else not sss.is_enabled(), by="web")
+                payload = json.dumps({"ok": True, "small": st},
+                                     ensure_ascii=False, default=str).encode("utf-8")
+                print(f"[面板] 小信号推送 → {'开' if st.get('enabled') else '关'}"
+                      f"（{st.get('changed_at')}）", flush=True)
+                self._send(200, payload, "application/json; charset=utf-8")
+                return
             if path.endswith("/on"):
                 st = push_switch.set_enabled(True, by="web")
             elif path.endswith("/off"):

@@ -97,6 +97,7 @@ details.coin.sell{border-left:3px solid var(--down)}
 .pushbtn.primary:hover{background:rgba(63,185,80,.12)}
 .pusherr{font-size:12px;color:var(--warn);margin-left:auto}
 .keybar{font-size:11px;margin:0 0 12px;padding:0 2px;line-height:1.55}
+.pushbar.small{border-left-color:var(--dim2,#8b949e);margin-bottom:10px}
 .pushnote{font-size:11px;margin:0 0 12px;padding:0 2px;line-height:1.55}
 .pushnote b{color:var(--fg)}
 @keyframes pushblink{0%,100%{opacity:1}50%{opacity:.45}}
@@ -179,6 +180,21 @@ a{color:var(--accent)}
   </span>
   <span style="flex:1"></span>
   <button class="pushbtn" id="pushbtn" onclick="togglePush()">开始推送</button>
+</div>
+
+<div class="pushbar small" id="smallbar">
+  <span class="pushico" id="smallico">🎯</span>
+  <span class="pushtxt">
+    <b id="smalltitle">只推关键点</b>
+    <span class="dim" id="smallsub">小信号（BOLL开口、大户多空比、缩量上涨…）只进控制台与日志，不推飞书。</span>
+  </span>
+  <span style="flex:1"></span>
+  <button class="pushbtn" id="smallbtn" onclick="toggleSmall()">小信号也推</button>
+</div>
+<div class="pushnote dim">
+  <b id="smallhint">当前＝对方的设计</b>：只有综合打分 ≥90 的「最佳低吸/高抛点」推飞书。
+  点右边按钮可让小信号也一起推（<b>不改任何判定与打分</b>，只是决定哪些已产生的报警进发送队列）。
+  两个开关是<b>独立</b>的：上面的总闸关掉就一条都不发。
 </div>
 <div class="pushnote dim">
   此开关是<b>全局的</b>（存在服务器上）：任何设备点一下，其它设备刷新后看到的都是同一状态。
@@ -328,6 +344,7 @@ function poll(){
     LAST_OK=Date.now()/1000; FAILS=0; hideBanner();
     document.getElementById('rn').textContent=s.round||0;
     applyPushFromState(s);              // 开关是全局的：别的设备改了，这里也跟着变
+    applySmallFromState(s);             // 「小信号也推」同理
     if(s.seq&&s.seq!==SEQ){
       var n=(s.alerts||[]).length;
       if(document.hidden){location.reload();return;}
@@ -407,6 +424,48 @@ function showPushErr(msg){
   setTimeout(function(){ if(el) el.textContent=''; }, 8000);
 }
 renderPush([[PUSH_JSON]], false);
+
+/* ── 「小信号也推」开关（独立于总闸；服务端状态） ── */
+function renderSmall(p, busy){
+  var bar=document.getElementById('smallbar'), ico=document.getElementById('smallico'),
+      ttl=document.getElementById('smalltitle'), sub=document.getElementById('smallsub'),
+      btn=document.getElementById('smallbtn'), hint=document.getElementById('smallhint');
+  if(!bar||!p) return;
+  var on=!!p.enabled;
+  bar.className='pushbar small'+(on?' on':'');
+  ico.textContent=on?'🔊':'🎯';
+  ttl.textContent=on?'小信号也推送':'只推关键点';
+  sub.textContent=on
+    ? '小信号（BOLL开口、大户多空比、缩量上涨…）也会推飞书。各自走冷却，不会刷屏。'
+    : '小信号（BOLL开口、大户多空比、缩量上涨…）只进控制台与日志，不推飞书。';
+  if(hint) hint.textContent = on
+    ? '当前＝你的原则' : '当前＝对方的设计';
+  btn.textContent=on?'只推关键点':'小信号也推';
+  btn.className='pushbtn '+(on?'danger':'primary');
+  btn.disabled=!!busy;
+}
+function applySmallFromState(s){
+  if(s&&s.small) renderSmall(s.small,false);
+}
+function toggleSmall(){
+  var btn=document.getElementById('smallbtn');
+  var goingOn = btn.textContent.indexOf('小信号')>=0;   // 点之前是"小信号也推"→ 目标为开
+  btn.disabled=true; btn.textContent='处理中…';
+  try{
+    fetch('/api/small',{method:'POST',cache:'no-store',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({enabled:goingOn})})
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(j&&j.ok){ renderSmall(j.small,false); setTimeout(function(){location.reload();},400); }
+        else { showPushErr('切换失败：'+((j&&j.error)||'未知错误')); renderSmall(j&&j.small,false); }
+      })
+      .catch(function(e){ showPushErr('切换失败（网络）：'+e); btn.disabled=false; });
+  }catch(e){
+    showPushErr('切换失败：'+e); btn.disabled=false;
+  }
+}
+renderSmall([[SMALL_JSON]], false);
 
 document.getElementById('rn').textContent='[[ROUND]]';
 tick(); setInterval(tick,1000); setInterval(poll,POLL);

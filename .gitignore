@@ -8,6 +8,7 @@ alerts.log
 alert_state*.json
 pushed.json
 push_switch.json
+small_signal_switch.json
 __pycache__/
 *.pyc
 .venv/
