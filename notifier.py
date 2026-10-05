@@ -61,15 +61,31 @@ def _feishu(title, desp):
 
 
 def send_wx(title, desp):
-    """所有通道都试一遍；**只要有一条成功就算送达**，失败原因全部打印出来。"""
-    results = []
+    """所有通道都试一遍；**只要有一条成功就算送达**，失败原因全部打印出来。
 
-    # 1) 控制台（不依赖网络）
+    ★ 全局推送开关（push_switch）：
+      关闭时 **只**跳过"对外通道"（飞书/钉钉等），
+      控制台与 alerts.log 文件留痕**照常** —— 这样关着的时候报了什么，
+      事后翻文件还能看到，不会凭空丢失。
+      开关是服务端状态，所有浏览器/手机共享同一个（与折叠记忆不同）。
+    """
+    from push_switch import is_enabled as _push_on, get_state as _push_state
+
+    results = []
+    push_on = True
+    try:
+        push_on = _push_on()
+    except Exception as e:
+        # 开关读不出来时**按"停"处理**（安全方向），并如实说明
+        push_on = False
+        results.append(("开关", False, f"读取失败，按停止处理：{type(e).__name__}: {e}"))
+
+    # 1) 控制台（不依赖网络）—— 不受开关影响
     if NOTIFY_CONSOLE:
         print(f"[通知] {title}\n{desp}", flush=True)
         results.append(("控制台", True, "ok"))
 
-    # 2) 文件留痕（不依赖网络）—— 任何通道全挂也不丢报警
+    # 2) 文件留痕（不依赖网络）—— 不受开关影响
     try:
         with open(NOTIFY_FILE, "a", encoding="utf-8") as f:
             f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n{title}\n{desp}\n")
@@ -77,7 +93,22 @@ def send_wx(title, desp):
     except Exception as e:
         results.append(("文件", False, f"{type(e).__name__}: {e}"))
 
-    # 3) 飞书
+    # 3) 对外通道 —— 开关关闭时跳过
+    if not push_on:
+        st = {}
+        try:
+            st = _push_state()
+        except Exception:
+            pass
+        why = f"推送开关已停止（{st.get('changed_at') or '默认'}）"
+        if NOTIFY_CONSOLE:
+            print(f"[通知] ⏸ {why} —— 仅记入 {NOTIFY_FILE}，未发飞书", flush=True)
+        try:
+            bump_suppressed()
+        except Exception:
+            pass
+        return any(ok for _n, ok, _w in results)
+
     ok, why = _feishu(title, desp)
     results.append(("飞书", ok, why))
 
@@ -100,13 +131,33 @@ def beep():
         pass
 
 
+# ── 被开关拦下的报警计数（仅用于页面提示"关着的时候有几条没发出去"）──
+_SUPPRESSED = {"n": 0, "since": None}
+
+def bump_suppressed():
+    if _SUPPRESSED["since"] is None:
+        _SUPPRESSED["since"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _SUPPRESSED["n"] += 1
+
+def suppressed_count():
+    return dict(_SUPPRESSED)
+
+def reset_suppressed():
+    _SUPPRESSED["n"] = 0
+    _SUPPRESSED["since"] = None
+
 
 # ============================================================
 # 通道清单：给面板/自检用。
 # **只返回名字与"是否启用"，绝不含 webhook / key 等任何值。**
 # ============================================================
 def get_channels():
-    """返回当前可用通道（名字 + 是否启用）。顺序即实际发送顺序。"""
+    """返回当前可用通道（名字 + 是否启用）。顺序即实际发送顺序。
+
+    注意 `enabled` 的含义是"**配置可用**"，不代表现在真的会发 ——
+    真发不发由全局推送开关决定（见 push_switch）。
+    页面要同时显示"配置可用"和"开关状态"，两者独立。
+    """
     import os as _os
     fw = FEISHU_WEBHOOK or _os.environ.get("FEISHU_WEBHOOK", "")
     return [

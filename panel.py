@@ -47,7 +47,26 @@ STATE = {
     "last_run_ts": None,
     "channels": [],
     "version": "",
+    "push": {"enabled": False, "changed_at": None, "changed_by": None},
 }
+
+
+def _push_state():
+    """读全局推送开关（服务端状态）。读不到就按"停"回报，绝不默认成"开"。"""
+    try:
+        import push_switch
+        st = push_switch.get_state()
+        try:
+            import notifier
+            sup = notifier.suppressed_count()
+            st["suppressed"] = sup.get("n", 0)
+            st["suppressed_since"] = sup.get("since")
+        except Exception:
+            st["suppressed"] = 0
+        return st
+    except Exception as e:
+        return {"enabled": False, "changed_at": None, "changed_by": None,
+                "error": f"{type(e).__name__}: {e}", "suppressed": 0}
 
 
 # ────────────────────────────────────────────────────────── 数字格式
@@ -141,6 +160,7 @@ def publish(coins, alerts, errors, duration=None, btc_chg=None):
                 "cooldown_min": getattr(config, "ALERT_COOLDOWN_MIN", 30),
                 "poll": getattr(config, "CHECK_INTERVAL", 60),
                 "pairs": len(getattr(config, "CURRENCY_PAIRS", [])),
+                "push": _push_state(),
             })
         return _seq
     except Exception as e:                      # 面板出问题也不能影响监控主线
@@ -316,6 +336,11 @@ def _alerts_block(s):
 
 def render_page():
     s = snapshot()
+    # 推送开关现读（同 /api/state）—— 保证刷新页面时看到的一定是当前值
+    try:
+        s["push"] = _push_state()
+    except Exception:
+        pass
     try:
         with open(TEMPLATE, "r", encoding="utf-8") as f:
             tpl = f.read()
@@ -343,6 +368,8 @@ def render_page():
                .replace("[[OVERVIEW]]", _overview_block(s))
                .replace("[[COINS]]", body)
                .replace("[[ALERTS]]", _alerts_block(s))
+               .replace("[[PUSH_JSON]]", json.dumps(s.get("push") or {"enabled": False},
+                                                     ensure_ascii=False, default=str))
                .replace("[[REFRESH]]", str(getattr(config, "PANEL_REFRESH_SEC", 10))))
     return html, "text/html; charset=utf-8"
 
@@ -382,6 +409,12 @@ class Handler(BaseHTTPRequestHandler):
             s = snapshot()
             s["server_now"] = time.time()
             s.pop("started_ts", None)
+            # ★ 推送开关必须**现读**，不能用上一轮快照里的值。
+            #   否则点了按钮要等下一轮（~30s）才看得到，像是"点了没反应"。
+            try:
+                s["push"] = _push_state()
+            except Exception:
+                pass
             self._send(200, json.dumps(s, ensure_ascii=False, default=str).encode("utf-8"),
                        "application/json; charset=utf-8")
         elif path == "/healthz":
@@ -389,9 +422,71 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain; charset=utf-8")
 
+    def do_POST(self):
+        """唯一的写操作：切换全局推送开关。
+
+        ★ 面板本身是只读的 —— 这里**只允许**改推送开关这一个东西：
+          不接受任意路径、不写其它文件、不参与任何判定。
+        开关是**服务端状态**，所以任何设备点一下，所有设备都会看到同一个结果。
+        """
+        path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
+        if path not in ("/api/push", "/api/push/toggle", "/api/push/on", "/api/push/off"):
+            self._send(404, b"not found", "text/plain; charset=utf-8")
+            return
+        try:
+            import push_switch
+            if path.endswith("/on"):
+                st = push_switch.set_enabled(True, by="web")
+            elif path.endswith("/off"):
+                st = push_switch.set_enabled(False, by="web")
+            else:
+                # 支持显式传值：{"enabled": true/false}；没传就翻转
+                body = b""
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    if 0 < n <= 4096:
+                        body = self.rfile.read(n)
+                except Exception:
+                    body = b""
+                want = None
+                ctype = (self.headers.get("Content-Type") or "").lower()
+                if body:
+                    try:
+                        if "json" in ctype or body.lstrip()[:1] in (b"{", b"["):
+                            want = json.loads(body.decode("utf-8")).get("enabled")
+                        else:
+                            # 表单兜底：fetch 不可用时前端退化成 <form> POST
+                            q = urllib.parse.parse_qs(body.decode("utf-8", "ignore"))
+                            v = (q.get("enabled") or [""])[0].lower()
+                            if v in ("1", "true", "on", "yes"):
+                                want = True
+                            elif v in ("0", "false", "off", "no"):
+                                want = False
+                    except Exception:
+                        want = None
+                if isinstance(want, bool):
+                    st = push_switch.set_enabled(want, by="web")
+                else:
+                    st = push_switch.toggle(by="web")
+            if st.get("enabled"):
+                try:
+                    import notifier
+                    notifier.reset_suppressed()      # 重新开始计数
+                except Exception:
+                    pass
+            payload = json.dumps({"ok": True, "push": st},
+                                 ensure_ascii=False, default=str).encode("utf-8")
+            print(f"[面板] 推送开关 → {'开启' if st.get('enabled') else '停止'}"
+                  f"（{st.get('changed_at')}）", flush=True)
+            self._send(200, payload, "application/json; charset=utf-8")
+        except Exception as e:
+            payload = json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"},
+                                 ensure_ascii=False).encode("utf-8")
+            self._send(500, payload, "application/json; charset=utf-8")
+
     def do_HEAD(self):
         path = urllib.parse.urlsplit(self.path).path.rstrip("/") or "/"
-        self._send(200 if path in ("/", "/api/state", "/healthz") else 404, b"",
+        self._send(200 if path in ("/", "/api/state", "/healthz", "/api/push") else 404, b"",
                    "text/html; charset=utf-8")
 
     def log_message(self, *a):

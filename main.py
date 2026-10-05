@@ -27,6 +27,15 @@ from news import get_latest_news
 pushed_news = set()
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
+# 只读 H5 面板（展示层）—— 不参与判定；导入失败也不能挡住监控
+try:
+    import panel
+    import panel_adapter
+    _PANEL_IMPORT_OK = True
+except Exception as _e:
+    _PANEL_IMPORT_OK = False
+    print(f"[面板] 未启用（导入失败）：{type(_e).__name__}: {_e}", flush=True)
+
 # 加载之前保存的推送记录
 pushed_file = "pushed.json"
 try:
@@ -134,6 +143,8 @@ def update_daily_extreme(pair, df, avg_vol):
     return DAILY_EXTREME["high"][coin], DAILY_EXTREME["low"][coin]
 
 def monitor_once():
+    _round_t0 = time.time()      # 面板"上一轮耗时"用（纯展示）
+    panel_coins = []             # 面板：本轮各币只读视图
     btc_chg = get_btc_chg()
     # BTC暴跌>3%避险提醒
     if btc_chg < -3:
@@ -823,6 +834,19 @@ def monitor_once():
                 upper = row['high'] - max(row['open'], row['close'])
                 if body>0 and upper > body*2:
                     upper_count +=1
+            # ── 面板：把本轮该币已算好的结果收成只读视图 ──
+            # 注意：必须放在下面 has_important 的 continue **之前**！
+            #   对方的逻辑是"只有重要信号才输出详细报告，否则 continue 跳过"，
+            #   而面板要展示**所有**币的状态，所以在这里就收走。
+            try:
+                if _PANEL_IMPORT_OK:
+                    panel_coins.append(panel_adapter.coin_view(
+                        pair=pair, coin=coin, ind_s=ind_s, ind_l=ind_l,
+                        flow=flow, score=(b_score, s_score),
+                        signal=current_signal if "current_signal" in dir() else "",
+                    ))
+            except Exception as _pe:
+                print(f"[面板] {coin} 视图收集失败：{type(_pe).__name__}: {_pe}", flush=True)
             # 只有这个币触发了重要操作信号，才输出详细分析，否则跳过
             has_important = any(('止盈' in x or '买入' in x or '卖出' in x or '高抛' in x or '急跌V反' in x or '超卖下轨' in x or '突破BOLL上轨' in x or '真高' in x or '真底' in x) for x in alerts)
             if not has_important:
@@ -974,9 +998,36 @@ def monitor_once():
             title = f"📈 K线监测 - {datetime.now().strftime('%m-%d %H:%M')}"
         send_wx(title, desp)
         save_pushed()
+
+        # ── 面板：发布本轮结果（只读展示）──
+        try:
+            if _PANEL_IMPORT_OK:
+                panel.publish(coins=panel_coins,
+                              alerts=[{'t': datetime.now().strftime('%H:%M:%S'),
+                                       'coin': c, 'text': ', '.join(a)} for c, a in alerts_all],
+                              errors=[], btc_chg=btc_chg,
+                              duration=time.time() - _round_t0)
+        except Exception as _pe:
+            print(f"[面板] 发布失败：{type(_pe).__name__}: {_pe}", flush=True)
         # beep()
 
+
+    # ── 面板：本轮无报警也要发布（页面才能看到最新状态）──
+    try:
+        if _PANEL_IMPORT_OK and not alerts_all:
+            panel.publish(coins=panel_coins, alerts=[], errors=[],
+                          btc_chg=btc_chg, duration=time.time() - _round_t0)
+    except Exception as _pe:
+        print(f"[面板] 发布失败：{type(_pe).__name__}: {_pe}", flush=True)
+
+
 if __name__ == "__main__":
+    # ── 面板：启动只读 H5 服务（后台线程；失败只警告，监控照跑）──
+    if _PANEL_IMPORT_OK:
+        try:
+            panel.start()
+        except Exception as _pe:
+            print(f"[面板] 启动失败（监控不受影响）：{type(_pe).__name__}: {_pe}", flush=True)
     print(f"启动模块化监测系统{VERSION} {VERSION_DATE}")
     last_backtest_ts = time.time()
     last_day = datetime.now().day

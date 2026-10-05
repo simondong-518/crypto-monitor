@@ -79,6 +79,32 @@ details.coin.sell{border-left:3px solid var(--down)}
 .ico{font-size:17px;line-height:1}
 /* 注意：只作用于走势图本身（svg.spark）。早前写成 .spark 时，<h1> 里那个
    同名的 emoji span 也被套上了 100%×58px 的边框，变成一个空方框（实图抓到）。*/
+.pushbar{display:flex;align-items:center;gap:10px;padding:10px 13px;margin:0 0 6px;
+  border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;
+  background:var(--panel);flex-wrap:wrap}
+.pushbar.on{border-left-color:var(--up)}
+.pushico{font-size:17px;line-height:1;flex:0 0 auto}
+.pushtxt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pushtxt b{font-size:13.5px}
+.pushtxt .dim{font-size:11.5px}
+.pushbtn{font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:7px 16px;
+  border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--fg);
+  white-space:nowrap;min-height:34px}
+.pushbtn:hover{background:var(--hair)}
+.pushbtn.primary{border-color:var(--up);color:var(--up);background:transparent}
+.pushbtn.danger{border-color:var(--warn);color:var(--warn);background:transparent}
+.pushbtn[disabled]{opacity:.55;cursor:default}
+.pushbtn.primary:hover{background:rgba(63,185,80,.12)}
+.pusherr{font-size:12px;color:var(--warn);margin-left:auto}
+.pushnote{font-size:11px;margin:0 0 12px;padding:0 2px;line-height:1.55}
+.pushnote b{color:var(--fg)}
+@keyframes pushblink{0%,100%{opacity:1}50%{opacity:.45}}
+.pushbar.on .pushico{animation:pushblink 2s ease-in-out infinite}
+@media (max-width:560px){
+  .pushbar{gap:8px;padding:9px 11px}
+  .pushtxt b{font-size:13px}
+  .pushbtn{width:100%;min-height:42px}
+}
 .ov{margin-bottom:10px}
 table.ovt{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .ovt th,.ovt td{padding:5px 8px;font-size:12.5px;white-space:nowrap}
@@ -143,6 +169,20 @@ a{color:var(--accent)}
 </header>
 
 <div id="banner" class="banner" onclick="location.reload()"></div>
+
+<div class="pushbar" id="pushbar">
+  <span class="pushico" id="pushico">⏸</span>
+  <span class="pushtxt">
+    <b id="pushtitle">推送已暂停</b>
+    <span class="dim" id="pushsub">报警仍在判定，只记入日志，不发送到飞书。</span>
+  </span>
+  <span style="flex:1"></span>
+  <button class="pushbtn" id="pushbtn" onclick="togglePush()">开始推送</button>
+</div>
+<div class="pushnote dim">
+  此开关是<b>全局的</b>（存在服务器上）：任何设备点一下，其它设备刷新后看到的都是同一状态。
+  —— 与「折叠记忆」不同，折叠只记在当前浏览器里。
+</div>
 
 <div class="ov">
   <div class="sec">总览（[[COINN]] 个币 · 现价实时 · 点下面任一卡片看逐项指标）</div>
@@ -284,6 +324,7 @@ function poll(){
   fetch('/api/state',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
     LAST_OK=Date.now()/1000; FAILS=0; hideBanner();
     document.getElementById('rn').textContent=s.round||0;
+    applyPushFromState(s);              // 开关是全局的：别的设备改了，这里也跟着变
     if(s.seq&&s.seq!==SEQ){
       var n=(s.alerts||[]).length;
       if(document.hidden){location.reload();return;}
@@ -293,6 +334,76 @@ function poll(){
   }).catch(function(){FAILS++; var ago=Math.round(Date.now()/1000-LAST_OK);
     banner('🔌 连不上监控进程（已 '+ago+' 秒没收到数据）—— 点这里重试；若一直这样，去电脑上看 logs\\monitor.log',true);});
 }
+
+/* ── 全局推送开关（服务端状态，所有设备共享） ── */
+function renderPush(p, busy){
+  var bar=document.getElementById('pushbar'), ico=document.getElementById('pushico'),
+      ttl=document.getElementById('pushtitle'), sub=document.getElementById('pushsub'),
+      btn=document.getElementById('pushbtn');
+  if(!bar||!p) return;
+  var on=!!p.enabled;
+  bar.className='pushbar'+(on?' on':'');
+  ico.textContent=on?'🟢':'⏸';
+  ttl.textContent=on?'推送中（报警会发到飞书）':'推送已暂停';
+  var extra='';
+  if(!on){
+    var n=p.suppressed||0;
+    extra = n>0 ? ('　已暂存 '+n+' 条未发送'+(p.suppressed_since?('（自 '+p.suppressed_since+'）'):'')+'，仍在 alerts.log')
+                : '　报警仍在判定，只记入日志，不发送到飞书。';
+  } else if(p.changed_at){
+    extra='　自 '+p.changed_at+' 起'+(p.changed_by?('（由 '+p.changed_by+' 操作）'):'');
+  }
+  sub.innerHTML=extra;
+  btn.textContent=on?'停止推送':'开始推送';
+  btn.className='pushbtn '+(on?'danger':'primary');
+  btn.disabled=!!busy;
+}
+function applyPushFromState(s){
+  if(s&&s.push) renderPush(s.push,false);
+}
+function togglePush(){
+  var btn=document.getElementById('pushbtn');
+  var goingOn = btn.textContent.indexOf('开始')>=0;   // 点之前是"开始"→ 目标为开
+  btn.disabled=true; btn.textContent='处理中…';
+  var done=function(j){
+    if(j&&j.ok){ renderPush(j.push,false); setTimeout(function(){location.reload();},400); }
+    else { showPushErr('切换失败：'+((j&&j.error)||'未知错误')); renderPush(j&&j.push,false); }
+  };
+  var fail=function(msg){
+    // 不用 alert：无头/手机某些环境会静默吞掉，改成页面内可见提示
+    showPushErr(msg); renderPush(window.__PUSH_LAST, false);
+  };
+  try{
+    fetch('/api/push',{method:'POST',cache:'no-store',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({enabled:goingOn})})
+      .then(function(r){return r.json();})
+      .then(done)
+      .catch(function(e){ fail('切换失败（网络）：'+e); });
+  }catch(e){
+    // 极端情况：fetch 本身不可用（很旧的浏览器/被策略限制）—— 退回表单 POST
+    try{
+      var f=document.createElement('form');
+      f.method='POST'; f.action='/api/push';
+      var i=document.createElement('input');
+      i.type='hidden'; i.name='enabled'; i.value=goingOn?'1':'0';
+      f.appendChild(i); document.body.appendChild(f); f.submit();
+    }catch(e2){ fail('切换失败：'+e2); }
+  }
+}
+/* 页面内可见的错误提示（替代 alert，alert 在部分环境不显示） */
+function showPushErr(msg){
+  var el=document.getElementById('pusherr');
+  if(!el){
+    el=document.createElement('span');
+    el.id='pusherr'; el.className='pusherr';
+    var bar=document.getElementById('pushbar');
+    if(bar) bar.appendChild(el);
+  }
+  el.textContent='⚠ '+msg;
+  setTimeout(function(){ if(el) el.textContent=''; }, 8000);
+}
+renderPush([[PUSH_JSON]], false);
 
 document.getElementById('rn').textContent='[[ROUND]]';
 tick(); setInterval(tick,1000); setInterval(poll,POLL);

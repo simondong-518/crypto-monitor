@@ -4,9 +4,10 @@ FEISHU_WEBHOOK
 *.log
 logs/
 alerts.log
-# 运行时状态：报警冷却记录 / 推送去重 / 动态高低点
+# 运行时状态：报警冷却记录 / 推送去重 / 动态高低点 / 全局推送开关
 alert_state*.json
 pushed.json
+push_switch.json
 __pycache__/
 *.pyc
 .venv/
