@@ -123,6 +123,22 @@ GATE_SIGNED_PATHS = []
 # 手续费（回测用）
 FEE_RATE = 0.001
 
+
+# ══════════════════════════════════════════════════════════════
+# ★ config_local.py 覆盖层 —— **必须在文件最末尾**
+#   本机私有配置（飞书 webhook / SendKey / Gate API keys）写在
+#   config_local.py 里，它已被 .gitignore 排除，不会进仓库。
+#   放在最后 import，同名的项就会覆盖上面的默认值。
+#
+#   （先前这一行丢了，但注释还写着"末尾的 import 会覆盖" ——
+#     于是 config_local.py 里的东西其实一直没被读进来。
+#     填入的 Gate key 读不到就是这个原因。）
+# ══════════════════════════════════════════════════════════════
+try:
+    from config_local import *          # noqa: F401,F403
+except ImportError:
+    pass
+
 # 动态有效高低点存储
 DAILY_EXTREME = {
     "date": "",
@@ -139,3 +155,19 @@ TRAILING_STOP = {
     "DOGE_USDT": 0.035,
     "BTC_USDT": 0.02
 }
+
+
+# ══════════════════════════════════════════════════════════════
+# ★ config_local.py 覆盖层 —— **必须在文件最末尾**
+#   本机私有配置（飞书 webhook / SendKey / Gate API keys）写在
+#   config_local.py 里，它已被 .gitignore 排除，不会进仓库。
+#   放在最后 import，同名的项就会覆盖上面的默认值。
+#
+#   （先前这一行丢了，但注释还写着"末尾的 import 会覆盖" ——
+#     于是 config_local.py 里的东西其实一直没被读进来。
+#     填入的 Gate key 读不到就是这个原因。）
+# ══════════════════════════════════════════════════════════════
+try:
+    from config_local import *
+except ImportError:
+    pass

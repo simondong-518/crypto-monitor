@@ -51,6 +51,36 @@ STATE = {
 }
 
 
+def _key_info_block(s):
+    """页面上显示 API key 轮换状态（**只有指纹与计数，不含 key 原文**）。"""
+    k = s.get("keys") or {}
+    n = int(k.get("n") or 0)
+    if n <= 0:
+        return ("🔑 API Key：<b>未配置</b>　"
+                "（当前为匿名请求；限流时可在 <code>config_local.py</code> 填 "
+                "<code>GATE_API_KEYS</code> 用多把 key 分摊额度）")
+    st = k.get("stats") or {}
+    parts = []
+    for fp, v in sorted(st.items(), key=lambda kv: -kv[1].get("used", 0)):
+        name = "匿名" if fp == "anonymous" else fp
+        t = f'<b>{name}</b> {v.get("used", 0)} 次'
+        if v.get("throttled"):
+            t += f'　<span style="color:var(--warn)">限流 {v["throttled"]} 次</span>'
+        parts.append(t)
+    body = "　·　".join(parts) if parts else "本轮还没发请求"
+    return (f'🔑 API Key：<b>{n} 把</b>轮换中（{k.get("status") or ""}）<br>'
+            f'　　用量：{body}')
+
+
+def _key_state():
+    """API key 轮换用量（只读，给页面看"额度分摊得怎么样"）。"""
+    try:
+        import notifier
+        return notifier.key_usage()
+    except Exception:
+        return {"n": 0, "status": "", "stats": {}}
+
+
 def _push_state():
     """读全局推送开关（服务端状态）。读不到就按"停"回报，绝不默认成"开"。"""
     try:
@@ -161,6 +191,7 @@ def publish(coins, alerts, errors, duration=None, btc_chg=None):
                 "poll": getattr(config, "CHECK_INTERVAL", 60),
                 "pairs": len(getattr(config, "CURRENCY_PAIRS", [])),
                 "push": _push_state(),
+                "keys": _key_state(),
             })
         return _seq
     except Exception as e:                      # 面板出问题也不能影响监控主线
@@ -368,6 +399,7 @@ def render_page():
                .replace("[[OVERVIEW]]", _overview_block(s))
                .replace("[[COINS]]", body)
                .replace("[[ALERTS]]", _alerts_block(s))
+               .replace("[[KEYINFO]]", _key_info_block(s))
                .replace("[[PUSH_JSON]]", json.dumps(s.get("push") or {"enabled": False},
                                                      ensure_ascii=False, default=str))
                .replace("[[REFRESH]]", str(getattr(config, "PANEL_REFRESH_SEC", 10))))

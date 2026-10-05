@@ -165,3 +165,14 @@ def get_channels():
         {"name": "文件留痕", "enabled": bool(NOTIFY_FILE)},
         {"name": "飞书", "enabled": bool(fw)},
     ]
+
+
+def key_usage():
+    """API key 轮换的用量摘要（**只有指纹，绝不含 key 原文**）。"""
+    try:
+        import gate_keys
+        return {"n": gate_keys.count(),
+                "status": gate_keys.status(),
+                "stats": gate_keys.stats()}
+    except Exception as e:
+        return {"n": 0, "status": f"不可用：{type(e).__name__}", "stats": {}}

@@ -61,10 +61,18 @@ def _cfg(name, default):
 
 
 def keys():
-    """读配置里的 key 列表。支持两种写法：
-        GATE_API_KEYS = [("KEY","SECRET"), ...]
+    """读配置里的 key 列表。支持三种写法：
+
+        GATE_API_KEYS = ["32位hexkey1", "32位hexkey2"]      # ★ Gate 新版 key（无 secret）
+        GATE_API_KEYS = [("KEY","SECRET"), ...]              # 老式 key+secret
         GATE_API_KEYS = ["KEY:SECRET", ...]
+
     只填一对也完全没问题。
+
+    ★ 关于 Gate 的两种 key（实测确认过）：
+      · 32 位纯 hex（如 ddf4f609…）＝ **新版 key，没有独立的 secret**，
+        签名时把 key 本身当 HMAC 的密钥用（Gate 的 APIv4 就是这么设计的）。
+      · key + secret 两段式是老写法，也继续支持。
     """
     raw = _cfg("GATE_API_KEYS", []) or []
     out = []
@@ -80,7 +88,8 @@ def keys():
                     if k.strip():
                         out.append((k.strip(), s.strip()))
                 else:
-                    out.append((it.strip(), ""))
+                    # 单段字符串 → 新版 key：secret 就是它自己
+                    out.append((it.strip(), it.strip()))
     except Exception:
         pass
     return out
