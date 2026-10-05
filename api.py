@@ -16,14 +16,47 @@ def _get_json(url, timeout=15, tries=3):
       3) 返回 [] 和返回数据在调用方无法区分。
     现在：HTTP 非 200 或返回的不是 list/dict 都算失败并打印原因；重试后仍失败才返回 None，
     调用方可以据此提示"这轮数据缺失"。
+
+    ★ API Key 轮换（gate_keys）：见该模块说明。默认**不签名**，
+      所以行为和以前完全一致；把路径加进 GATE_SIGNED_PATHS 后，
+      该路径的请求会自动带上轮换到的 key，额度就被分摊开了。
     """
     last = ""
     for i in range(tries):
+        # ── 选 key（默认不签名 → 返回空头，行为不变）──
+        headers = {}
+        used_key = None
         try:
-            r = requests.get(url, timeout=timeout)
+            import gate_keys
+            if gate_keys.needs_sign(url):
+                used_key, _sec = gate_keys.pick(url)
+                if used_key:
+                    headers = gate_keys.sign_headers(url, key=used_key[0]
+                                                     if isinstance(used_key, tuple)
+                                                     else used_key)
+        except Exception as e:
+            print(f"[api] key 轮换跳过（{type(e).__name__}: {e}）", flush=True)
+
+        try:
+            r = requests.get(url, timeout=timeout, headers=headers or None)
+            try:
+                import gate_keys as _gk
+                throttled = r.status_code in (429, 503)
+                _gk.note_use(url,
+                             key=(used_key[0] if isinstance(used_key, tuple) else used_key),
+                             throttled=throttled)
+            except Exception:
+                pass
+
             if r.status_code != 200:
                 last = f"HTTP {r.status_code} {r.text[:120]}"
-                time.sleep(1)
+                # 被限流：等一下再试（也用掉下一次尝试换 key 的机会）
+                if r.status_code in (429, 503):
+                    print(f"[api] 被限流 HTTP {r.status_code}，{1.5 * (i + 1):.1f}s 后重试"
+                          f"（第 {i + 1}/{tries} 次）", flush=True)
+                    time.sleep(1.5 * (i + 1))
+                else:
+                    time.sleep(1)
                 continue
             data = r.json()
             if not isinstance(data, (list, dict)):
@@ -42,13 +75,56 @@ def _get_json(url, timeout=15, tries=3):
 
 
 def get_kline(pair, interval='15m', limit=100):
+    """K 线。**15m 一律实时**（对方口径：用还在走的那根，不能加延时）。
+
+    其余周期（1h/4h/1d…）走缓存 —— 它们"下一个整点才可能变"，
+    按实时频率拉纯属浪费，也是被限流的主因。
+    缓存 key 带"当前 K 线起点"，跨整点自动失效，所以不会晚发现新数据。
+    """
     url = f"{BASE}/spot/candlesticks?currency_pair={pair}&interval={interval}&limit={limit}"
+
+    ttl = 0
+    try:
+        import kline_cache
+        if str(interval) != "15m":          # ★ 15m 永不缓存
+            ttl = kline_cache.ttl_for(interval)
+        if ttl > 0:
+            key = ("kline", pair, str(interval), limit,
+                   kline_cache.bar_start(interval))
+            data = kline_cache.get_or_fetch(key, ttl, lambda: _get_json(url))
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        # 缓存层出任何问题都必须退化成"直接取"，绝不能因为缓存把数据搞没
+        print(f"[api] 缓存跳过（{type(e).__name__}: {e}），改为直接取数", flush=True)
+
     data = _get_json(url)
     return data if isinstance(data, list) else []
 
 
 def get_trades(pair, limit=100):
+    """逐笔成交。
+
+    ★ 小窗口（limit<=100）走**极短**缓存（默认 20 秒）：
+      理由：一轮 27 秒里有 3 处要逐笔 —— 主循环 1 次 + 1h 资金流内部 1 次，
+      开的还是同一个币的**同一份最新成交列表**。同一轮里重复拉纯属浪费。
+      20 秒 < 一轮，所以**每轮至少真取一次**，跟得上最新成交。
+
+    ★ 大窗口（limit=1000，算 1h 资金流用）**不缓存**，
+      它本来就是历史汇总，且需要每次都看到最新几百笔。
+    """
     url = f"{BASE}/spot/trades?currency_pair={pair}&limit={limit}"
+    ttl = 0
+    try:
+        import kline_cache
+        if int(limit) <= 100:
+            ttl = kline_cache.ttl_for("trades")
+        if ttl > 0:
+            bucket = int(time.time() * 1000) // (ttl * 1000)
+            data = kline_cache.get_or_fetch(
+                ("trades", pair, int(limit), bucket), ttl, lambda: _get_json(url))
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[api] 缓存跳过（{type(e).__name__}: {e}），改为直接取数", flush=True)
     data = _get_json(url)
     return data if isinstance(data, list) else []
 
@@ -67,6 +143,18 @@ def get_ls(pair):
       改成公开的 `/futures/usdt/contract_stats`，一次拿到 top_lsr_account 与 top_lsr_size。
     """
     url = f"{BASE}/futures/usdt/contract_stats?contract={pair}&limit=1"
+    # Gate 自身约 5 分钟更新一次；按 60s 轮询纯属重复拉。
+    # key 取 5 分钟桶 —— 跨桶自动重拉，不会晚于 Gate 的更新节奏。
+    try:
+        import kline_cache
+        ttl = kline_cache.ttl_for("ls")
+        if ttl > 0:
+            bucket = int(time.time()) // 300 * 300
+            data = kline_cache.get_or_fetch(
+                ("ls", pair, bucket), ttl, lambda: _get_json(url, timeout=10))
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[api] 缓存跳过（{type(e).__name__}: {e}），改为直接取数", flush=True)
     data = _get_json(url, timeout=10)
     if isinstance(data, list):
         return data
