@@ -142,6 +142,22 @@ def update_daily_extreme(pair, df, avg_vol):
                     del pushed[k]
     return DAILY_EXTREME["high"][coin], DAILY_EXTREME["low"][coin]
 
+def _boll_open_up(ind, df_tf):
+    """该周期是否『BOLL三轨开口向上』：三轨有序(上>中>下) + 上轨比上一根抬升。
+
+    与原来 15m 单周期的判据完全一致，只是抽成函数以便两个周期复用。
+    取数异常一律返回 False（不误报）。
+    """
+    try:
+        u = float(ind['boll_u'])
+        m = float(ind['boll_mid'])
+        l = float(ind['boll_l'])
+        uprev = float(df_tf['boll_u'].iloc[-2]) if 'boll_u' in df_tf.columns else 0.0
+        return bool(u > m > l and u > uprev)
+    except Exception:
+        return False
+
+
 def monitor_once():
     _round_t0 = time.time()      # 面板"上一轮耗时"用（纯展示）
     panel_coins = []             # 面板：本轮各币只读视图
@@ -369,15 +385,22 @@ def monitor_once():
                     alerts.append(f"🟢 假跌破下轨涨回，别恐慌割肉")
             # 【2026-10-05 新增】慢涨趋势信号1：BOLL三轨开口向上
             # 说明：BOLL上轨>中轨>下轨，且三轨同步抬升，是慢牛行情特征，抓DOGE这种慢涨
-            boll_u_now = ind_s['boll_u']
-            boll_m_now = ind_s['boll_mid']
-            boll_l_now = ind_s['boll_l']
-            boll_u_prev = df_s['boll_u'].iloc[-2] if 'boll_u' in df_s.columns else 0
-            if boll_u_now > boll_m_now > boll_l_now and boll_u_now > boll_u_prev:
+            #
+            # ★ 用户要求（2026-10-06）：由 15m 单周期 → **15m 为主 + 结合 1h，15m 占 60%**
+            #   做法：两个周期各判一次"开口向上"，按 60/40 加权，合计 ≥60 分触发。
+            #     · 15m 满足            → 60 分 → **达到阈值，触发**（15m 是必要条件）
+            #     · 15m + 1h 都满足     → 100 分 → 触发，且强度更高（更可信）
+            #     · 只有 1h 满足        → 40 分 → 不触发
+            #   权重正好落在阈值上，所以语义 = "15m 必须有，1h 是确认"，与"15m 为主"一致。
+            boll_s15 = 60 if _boll_open_up(ind_s, df_s) else 0
+            boll_s1h = 40 if (ind_l and _boll_open_up(ind_l, ind_l.get('df'))) else 0
+            boll_score = boll_s15 + boll_s1h
+            if boll_score >= 60:
                 key_boll_open = f"{coin}_BOLL开口向上"
                 if pushed.get(key_boll_open,0) < 2:  # 一天最多推2次
                     mark_alert(key_boll_open)
-                    alerts.append(f"📈 BOLL三轨开口向上，慢牛趋势，可持有")
+                    _共振 = "15m+1h 双周期共振" if boll_score >= 100 else "15m 为主"
+                    alerts.append(f"📈 BOLL三轨开口向上，慢牛趋势，可持有（{boll_score}/100，{_共振}）")
             # 【2026-10-05 新增】慢涨趋势信号2：连续3根小阳推升
             # 说明：连续3根15分钟小阳线，累计涨幅≥1%，不跌破前低，抓慢涨启动
             if len(df_s)>=3:
@@ -420,8 +443,8 @@ def monitor_once():
             # 条件2：连续1h净流入≥1.5万
             if flow_1h >=15000:
                 slow_buy_score +=1
-            # 条件3：BOLL三轨开口向上
-            if boll_u_now > boll_m_now > boll_l_now and boll_u_now > boll_u_prev:
+            # 条件3：BOLL三轨开口向上（与上面同一口径：15m 为主 + 1h，≥60 分）
+            if boll_score >= 60:
                 slow_buy_score +=1
             # 条件4：RSI在50-70之间，健康不超买
             if 50 <= ind_s['rsi'] <=70:
