@@ -2,9 +2,11 @@
 import sys
 import io
 # 强制整个程序用UTF-8编码，解决Windows下中文乱码
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+# line_buffering=True：让 print 逐行落盘。否则重定向到文件时是块缓冲，
+# 日志会滞后很久才出现（排障时看不到实时输出）。仅影响输出时机，不改任何逻辑。
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 import json
 import time
 import re
