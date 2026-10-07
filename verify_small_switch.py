@@ -56,7 +56,8 @@ check("再改回也立刻可见", sss.is_enabled() is False)
 src = open("main.py", encoding="utf-8").read()
 
 check("main.py 里保留了小信号（不再直接丢）",
-      "small_alerts = list(alerts)" in src)
+      "small_alerts = [x for x in alerts if not _is_report_signal(x)]" in src
+      or "small_alerts = list(alerts)" in src)
 check("main.py 里读开关决定要不要推",
       "small_signal_switch" in src and "small_signal_switch.is_enabled()" in src)
 check("★ 小信号也走冷却（不会因开开关而刷屏）",

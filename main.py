@@ -236,6 +236,40 @@ def _boll_open_up(ind, df_tf):
         return False
 
 
+# ══════════════════════════════════════════════════════════════
+# 【2026-10-07 新增】信号分级：哪些报警"带完整全方位分析报告"
+# ══════════════════════════════════════════════════════════════
+# 规格（用户 2026-10-07 明确定义）：
+#   ▸ 带完整报告 —— 涉及买卖操作 / 主力级别，需要做决策：
+#       ① 移动止盈落袋提醒
+#       ② ≥30分 低吸/高抛预警
+#       ③ ≥90分 最佳买卖点
+#       ④ V型反弹 / 见顶回落
+#       ⑤ BOLL 真突破上轨 / 真跌破下轨（连续 2 根确认的真破轨）
+#       ⑥ 缩量慢涨 / 慢跌启动
+#       ⑦ 大级别资金流入 / 流出（主力资金）
+#       ⑧ 真高 / 真底提醒
+#   ▸ 只推一句话 —— 盘面异动/板块提示，不用做复杂决策：
+#       30分钟急涨急跌 · 变盘点趋势转多转空 · 大反弹大回撤 ·
+#       大户极端多空比 · 板块联动 · 币种小级别新闻快讯
+# 注意：本函数只决定"哪些报警进详细报告"，**不改任何信号的触发条件**。
+_REPORT_KEYWORDS = (
+    "移动止盈落袋",                        # ①
+    "低吸预警", "高抛预警",                 # ②（含"紧急低吸/高抛预警"）
+    "最佳低吸点", "最佳高抛点",             # ③
+    "V型反弹", "见顶回落",                  # ④
+    "真突破可以追多", "真跌破超卖低吸",     # ⑤
+    "缩量慢涨启动", "缩量慢跌开始",         # ⑥
+    "资金大幅流入", "资金大幅流出",         # ⑦
+    "触及当日真高", "触及当日真底",         # ⑧
+)
+
+
+def _is_report_signal(text):
+    """该报警是否属于『带完整全方位分析报告』的 8 类重要信号。"""
+    return any(k in text for k in _REPORT_KEYWORDS)
+
+
 def monitor_once():
     _round_t0 = time.time()      # 面板"上一轮耗时"用（纯展示）
     panel_coins = []             # 面板：本轮各币只读视图
@@ -774,10 +808,17 @@ def monitor_once():
             #   由 small_signal_switch 决定要不要一起发：
             #     关（默认）= 和原来完全一样，只有 ≥90 的关键点推
             #     开        = 这些小信号也一起推（用户要的"触发即上报"）
-            small_alerts = list(alerts)      # 留一份，先不丢
-            for msg in small_alerts:
+            #
+            # ★ 我方补充 2（2026-10-07 信号分级规格）：这段之前的报警里也有
+            #   **属于"带完整报告"8 类**的（真高/真底、BOLL真突破/真跌破、
+            #   移动止盈落袋）。它们不该被清掉 —— 单独留一份，clear 之后放回
+            #   推送队列，这样它们才会带完整报告推出去。
+            keep_alerts  = [x for x in alerts if _is_report_signal(x)]
+            small_alerts = [x for x in alerts if not _is_report_signal(x)]
+            for msg in alerts:
                 print(f"[{coin}] 控制台小信号: {msg}")
             alerts.clear()
+            alerts.extend(keep_alerts)       # 报告级信号回到推送队列
             # ==============================================
             # 【2026-10-05 新增】强单信号恢复推飞书
             # 逻辑：统一锁+解锁机制，同一波行情只推一次，变盘后自动解锁
@@ -1162,9 +1203,14 @@ def monitor_once():
                     ))
             except Exception as _pe:
                 print(f"[面板] {coin} 视图收集失败：{type(_pe).__name__}: {_pe}", flush=True)
-            # 只有这个币触发了重要操作信号，才输出详细分析，否则跳过
-            # 2026-10-06 把缩量慢涨/慢跌信号加入推飞书强信号列表
-            has_important = any(('止盈' in x or '买入' in x or '卖出' in x or '高抛' in x or '急跌V反' in x or '超卖下轨' in x or '突破BOLL上轨' in x or '真高' in x or '真底' in x or '缩量慢涨' in x or '缩量慢跌' in x) for x in alerts)
+            # 只有这个币触发了**带完整报告的重要信号**，才输出详细分析，否则跳过
+            # 【2026-10-07 改】原来用模糊关键词（'止盈'/'买入'/'卖出'…）判，
+            #   会把"1h资金大幅流入…真金白银**买入**"这种强单信号误判成重要信号，
+            #   也会漏掉 V型反弹/见顶回落（文案里没有 '急跌V反'）。
+            #   现按用户定的信号分级规格，用 _is_report_signal() 精确判定 8 类：
+            #     移动止盈 / ≥30分预警 / ≥90分最佳点 / V反·见顶回落 /
+            #     BOLL真破轨 / 缩量慢涨慢跌 / 大级别资金 / 真高·真底
+            has_important = any(_is_report_signal(x) for x in alerts)
             if not has_important:
                 continue
             lines.append(f"## {coin}/USDT 全方位分析:")
@@ -1345,7 +1391,9 @@ def monitor_once():
         for c, a in alerts_all:
             alert_lines.append(f"- **{c}**: {', '.join(a)}")
             # 判断有没有需要详细报告的重要操作信号
-            if any(('止盈' in x or '买入' in x or '卖出' in x or '高抛' in x or '急跌V反' in x or '超卖下轨' in x or '突破BOLL上轨' in x or '真高' in x or '真底' in x) for x in a):
+            # 【2026-10-07 改】同 L1208：用统一的 _is_report_signal() 判 8 类，
+            #   不再用模糊关键词（否则资金流误命中、V反/见顶漏判）。
+            if any(_is_report_signal(x) for x in a):
                 need_detail = True
         alert_lines.append("")
         # 只有有重要信号才带详细报告，否则只推简短信号
