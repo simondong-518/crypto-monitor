@@ -1,0 +1,32 @@
+# -*- coding: utf-8 -*-
+"""本地配置模板 —— 复制成 config_local.py 后填自己的值。
+
+说明：
+  · config.py 末尾会 `from config_local import *`，这里定义的变量会覆盖默认值。
+  · config_local.py 已被 .gitignore 排除，不会进仓库/压缩包。
+  · 把本文件复制为 config_local.py，再填值即可。
+"""
+
+# ── 飞书群 webhook ──────────────────────────────────────────
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/请填你自己的webhook"
+
+# ── 钉钉 SendKey（可选；填了就同时推钉钉）────────────────────
+SENDKEY1 = ""
+SENDKEY2 = ""
+
+# ── Gate.io API Key（可选，用于多 key 轮换分摊限流）───────────
+#   两种写法都支持：
+#     · 老式 key + secret  →  元组  ("你的key", "你的secret")
+#     · 新版 32 位 hex key →  直接写字符串  "你的32位hexkey"
+#   没填就只用公开接口（也能跑，只是请求频率受限）。
+GATE_API_KEYS = [
+    # ("你的key", "你的secret"),
+    # "0123456789abcdef0123456789abcdef",
+]
+
+# ── 需要签名的接口路径（填了才用 key 分摊）────────────────────
+#   注意：公开接口（spot/trades、spot/candlesticks、contract_stats 等）
+#   是按 **IP** 限流的，多 key 帮不上忙；要分摊必须走签名接口。
+GATE_SIGNED_PATHS = [
+    # "/spot/trades",
+]
