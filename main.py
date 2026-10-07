@@ -27,6 +27,15 @@ from notifier import send_wx
 from alert_state import AlertState, stable_alert_key
 from news import get_latest_news
 pushed_news = set()
+# 【2026-10-05 修复】慢涨启动锁移到全局，不要每次循环都清空
+SLOW_START_LOCK = {}
+# 【2026-10-05 新增】强单信号统一锁字典，每个信号独立锁+解锁
+SIGNAL_LOCK = {}
+# 新闻推送全局变量
+last_news_date = ""
+news_count = 0
+# 【2026-10-05 新增】1h资金上一轮值，用来做连续两轮确认
+FLOW_PREV = {}
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
 # 只读 H5 面板（展示层）—— 不参与判定；导入失败也不能挡住监控
@@ -69,8 +78,75 @@ LAST_RSI_STATE = {} # over=超买，under=超卖，normal=中性
 MAX_FLOW_IN_15M = {}
 MAX_FLOW_OUT_15M = {}
 
-# 瀛樻渶杩戜竴娆″洖娴嬬粨鏋?
+#回测结果全局变量
 last_backtest_result = ""
+
+# 【2026-10-06 新增】缩量慢涨/慢跌信号锁
+SHRINK_LOCK = {"rise": set(), "drop": set()}
+
+# 【2026-10-06 新增】标准函数：判断是否为缩量慢涨启动信号
+def check_shrink_rise(coin, df_s, ind_s):
+    """缩量慢涨启动：连续2根小阳线+缩量+站上EMA20+刚从低点启动"""
+    try:
+        if len(df_s) < 12: return None
+        # 连续2根小阳线
+        k1 = df_s.iloc[-2]
+        k2 = df_s.iloc[-1]
+        yang1 = k1['close'] > k1['open']
+        yang2 = k2['close'] > k2['open']
+        chg1 = (k1['close'] - k1['open'])/k1['open']*100
+        chg2 = (k2['close'] - k2['open'])/k2['open']*100
+        # 小阳线：单根涨0.2%-1%
+        if not (yang1 and yang2 and 0.2 < chg1 < 1 and 0.2 < chg2 < 1):
+            return None
+        # 缩量：最近2根平均量 < 前10根平均量的70%
+        vol_recent = (k1['volume'] + k2['volume'])/2
+        vol_prev = df_s['volume'].iloc[-12:-2].mean()
+        if vol_recent > vol_prev * 0.7:
+            return None
+        # 站上EMA20
+        if not ind_s['trend_up']:
+            return None
+        # 刚启动：从30分钟低点涨不到2%
+        low_30m = df_s['low'].tail(3).min()
+        rise_from_low = (ind_s['close'] - low_30m)/low_30m*100
+        if rise_from_low > 2:
+            return None
+        return f"🟢 缩量慢涨启动，连续2根小阳+缩量，主力悄悄吸筹，后续看涨"
+    except:
+        return None
+
+# 【2026-10-06 新增】标准函数：判断是否为缩量慢跌启动信号
+def check_shrink_drop(coin, df_s, ind_s):
+    """缩量慢跌启动：连续2根小阴线+缩量+跌破EMA20+刚从高点回落"""
+    try:
+        if len(df_s) < 12: return None
+        # 连续2根小阴线
+        k1 = df_s.iloc[-2]
+        k2 = df_s.iloc[-1]
+        yin1 = k1['close'] < k1['open']
+        yin2 = k2['close'] < k2['open']
+        chg1 = (k1['open'] - k1['close'])/k1['open']*100
+        chg2 = (k2['open'] - k2['close'])/k2['open']*100
+        # 小阴线：单根跌0.2%-1%
+        if not (yin1 and yin2 and 0.2 < chg1 < 1 and 0.2 < chg2 < 1):
+            return None
+        # 缩量：最近2根平均量 < 前10根平均量的70%
+        vol_recent = (k1['volume'] + k2['volume'])/2
+        vol_prev = df_s['volume'].iloc[-12:-2].mean()
+        if vol_recent > vol_prev * 0.7:
+            return None
+        # 跌破EMA20
+        if ind_s['trend_up']:
+            return None
+        # 刚启动：从30分钟高点跌不到2%
+        high_30m = df_s['high'].tail(3).max()
+        drop_from_high = (high_30m - ind_s['close'])/high_30m*100
+        if drop_from_high > 2:
+            return None
+        return f"🔴 缩量慢跌开始，连续2根小阴+缩量，主力悄悄出货，后续看跌"
+    except:
+        return None
 
 def save_pushed():
     with open(pushed_file, "w") as f:
@@ -177,15 +253,26 @@ def monitor_once():
             mark_alert(key_btc)
             send_wx("⚠️ BTC风险提示", f"BTC今日跌{btc_chg:.1f}%，小币可能补跌，注意仓位")
     # 新闻提醒：宏观事件/单币新闻单独推，不参与打分
+    # 【2026-10-05 修复】一天最多推5条新闻，避免刷屏
     coin_news, macro_news = get_latest_news()
+    news_count_today = 0
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    global last_news_date, news_count
+    if not hasattr(last_news_date, 'value') or last_news_date != today_str:
+        last_news_date = today_str
+        news_count = 0
     for n in macro_news:
+        if news_count >=5: break
         if n not in pushed_news:
             pushed_news.add(n)
             send_wx("📰 宏观事件提醒", n)
+            news_count +=1
     for n in coin_news:
+        if news_count >=5: break
         if n not in pushed_news:
             pushed_news.add(n)
             send_wx("📰 币圈新闻", n)
+            news_count +=1
     # 价格止盈止损提醒：遍历用户设置的止盈止损价位
     for alert_pair, (take_profit, stop_loss) in PRICE_ALERT.items():
         coin = alert_pair.replace("_USDT","")
@@ -204,11 +291,13 @@ def monitor_once():
                 beep()
         except: pass
     alerts_all = []
+    coin_chg = {}  # 2026-10-07 新增：存所有币今日涨跌幅，用于板块联动判断
     lines = ["# 📈 K线监测报告", f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
     for pair in CURRENCY_PAIRS:
         coin = pair.replace("_USDT", "")
         try:
             ind_s = get_indicator(pair, "15m")
+            coin_chg[coin] = ind_s['day_chg']  # 存当日涨跌幅用于板块联动判断
             ind_l = get_indicator(pair, "1h")
             daily_up = get_daily_trend(pair)
             trades = get_trades(pair)
@@ -325,14 +414,8 @@ def monitor_once():
                 if should_alert(key_low):
                     mark_alert(key_low)
                     alerts.append("🟢 触及当日真底，主力接盘，关注买入机会")
-            # 动态移动止盈：从有效高点回撤到阈值
-            trail_ratio = TRAILING_STOP.get(pair, 0.035)
+            # 移动止盈逻辑放到后面ATR算完之后
             drawdown = (eff_high - ind_s['close'])/eff_high
-            if drawdown >= trail_ratio:
-                key_trail = f"{coin}_移动止盈{trail_ratio*100:.0f}%"
-                if should_alert(key_trail):
-                    mark_alert(key_trail)
-                    alerts.append(f"⚠️ 从高点回撤{drawdown*100:.1f}%，移动止盈落袋")
             if abs(ind_s['day_chg']) >= 5:
                 alerts.append(f"今日{'大涨' if ind_s['day_chg']>0 else '大跌'}{ind_s['day_chg']:.1f}%")
                 if ind_s['trend_up'] and ind_s['day_chg']>0:
@@ -357,22 +440,22 @@ def monitor_once():
                 if should_alert(key_dead):
                     mark_alert(key_dead)
                     alerts.append("🔴 EMA死叉，短线空头启动")
-            # 新增：突破BOLL上轨提醒
-            if ind_s['close'] > ind_s['boll_u'] and vol_enough:
-                key_break = f"{coin}_突破BOLL上轨"
-                if should_alert(key_break):
-                    mark_alert(key_break)
-                    alerts.append(f"✅ 放量突破BOLL上轨{ind_s['boll_u']:.4f}，可以追多")
             if reverse_alert:
                 alerts.append(reverse_alert)
-            # 新增：跌破BOLL下轨超卖提醒
-            if ind_s['close'] < ind_s['boll_l']:
-                key_break_l = f"{coin}_跌破BOLL下轨"
-                if should_alert(key_break_l):
-                    mark_alert(key_break_l)
-                    alerts.append(f"🟢 跌破BOLL下轨{ind_s['boll_l']:.4f}，超卖低吸机会")
-            # 假突破上轨提醒：上根在上方，本根跌回上轨里面
             df_s = ind_s['df']
+            # 2026-10-07 优化：BOLL破轨改用标准函数判断，过滤插针假突破
+            from indicators import check_boll_breakout
+            boll_br = check_boll_breakout(df_s, ind_s['close'], ind_s['boll_u'], ind_s['boll_l'], coin)
+            if boll_br == 'true_break_up' and vol_enough:
+                key_break = f"{coin}_突破BOLL上轨"
+                if key_break not in pushed:
+                    pushed[key_break] = 1
+                    alerts.append(f"✅ 连续2根K线放量突破BOLL上轨{ind_s['boll_u']:.4f}，真突破可以追多")
+            elif boll_br == 'true_break_down':
+                key_break_l = f"{coin}_跌破BOLL下轨"
+                if key_break_l not in pushed:
+                    pushed[key_break_l] = 1
+                    alerts.append(f"🟢 连续2根K线跌破BOLL下轨{ind_s['boll_l']:.4f}，真跌破超卖低吸机会")
             prev_close = df_s.iloc[-2]['close']
             if prev_close > ind_s['boll_u'] and ind_s['close'] < ind_s['boll_u']:
                 key_fake_up = f"{coin}_假突破上轨"
@@ -596,9 +679,35 @@ def monitor_once():
                 if should_alert(key_fast_flow):
                     mark_alert(key_fast_flow)
                     alerts.append(f"⚡ 最近15分钟资金流出{fmt_money(cur_out_abs)}，主力突然跑路")
-            # 新增：急涨预警，提前发现拉升，别追高（30分钟内涨≥2%就提醒）
+            # 新增：急涨预警，提前发现拉升，别追高
+            # 【2026-10-05 19:10 优化：用ATR动态算阈值，2倍ATR才算真急涨，资金按币种分档】
+            tr1 = df_s['high']-df_s['low']
+            tr2 = (df_s['high']-df_s['close'].shift(1)).abs()
+            tr3 = (df_s['low']-df_s['close'].shift(1)).abs()
+            tr = tr1.combine(tr2, max).combine(tr3, max)
+            atr_pct = tr.rolling(14).mean().iloc[-1]/df_s['close'].iloc[-1]*100
+            rush_thresh = 2 * atr_pct  # 急涨阈值：2倍ATR
+            bounce_thresh = 1.5 * atr_pct  # 大反弹阈值：1.5倍ATR
+            # 2026-10-07 动态移动止盈：从有效高点回撤1.5倍ATR就止盈
+            trail_ratio = atr_pct/100 * 1.5
+            drawdown = (eff_high - ind_s['close'])/eff_high
+            if drawdown >= trail_ratio:
+                key_trail = f"{coin}_移动止盈"
+                if key_trail not in pushed:
+                    pushed[key_trail] = 1
+                    alerts.append(f"⚠️ 从高点回撤{drawdown*100:.1f}%（动态阈值{trail_ratio*100:.1f}%），移动止盈落袋")
+            # 资金阈值按币种体量分档
+            if 'BTC' in coin or 'BSV' in coin:
+                big_flow_1h = 150000
+                big_flow_15m = 30000
+            elif 'CYS' in coin:
+                big_flow_1h = 30000
+                big_flow_15m = 10000
+            else:
+                big_flow_1h = 100000
+                big_flow_15m = 20000
             recent_chg = (df_s['close'].iloc[-1] - df_s['close'].iloc[-3]) / df_s['close'].iloc[-3] * 100
-            if recent_chg >= 2 and vol_enough:
+            if recent_chg >= rush_thresh and vol_enough:
                 key_rush = f"{coin}_急涨预警"
                 if should_alert(key_rush):
                     mark_alert(key_rush)
@@ -670,6 +779,99 @@ def monitor_once():
                 print(f"[{coin}] 控制台小信号: {msg}")
             alerts.clear()
             # ==============================================
+            # 【2026-10-05 新增】强单信号恢复推飞书
+            # 逻辑：统一锁+解锁机制，同一波行情只推一次，变盘后自动解锁
+            # ==============================================
+            # 1. 30分钟急涨≥2倍ATR/急跌≥2倍ATR（动态阈值，加滞回死区防止横盘来回推）
+            if recent_chg >= rush_thresh:
+                if f"{coin}_30m急涨" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_30m急涨"] = True
+                    alerts.append(f"⚡ 30分钟急涨{recent_chg:.1f}%，注意追高风险")
+            # 急涨解锁：从高点回撤1.5倍ATR（滞回，缓冲带）
+            if f"{coin}_30m急涨" in SIGNAL_LOCK and (recent_high_30m - ind_s['close'])/recent_high_30m*100 >= atr_pct*1.5:
+                del SIGNAL_LOCK[f"{coin}_30m急涨"]
+            elif recent_chg <= -rush_thresh:
+                if f"{coin}_30m急跌" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_30m急跌"] = True
+                    alerts.append(f"⚡ 30分钟急跌{recent_chg:.1f}%，注意恐慌割肉")
+            # 急跌解锁：从低点反弹1.5倍ATR（滞回，缓冲带）
+            if f"{coin}_30m急跌" in SIGNAL_LOCK and (ind_s['close'] - recent_low_30m)/recent_low_30m*100 >= atr_pct*1.5:
+                del SIGNAL_LOCK[f"{coin}_30m急跌"]
+            # 2. 1h资金大幅异动≥分档阈值（连续两轮同方向+15分钟配合，双确认过滤毛刺）
+            prev_flow = FLOW_PREV.get(coin, 0)
+            if flow_1h >= big_flow_1h and prev_flow > 0 and recent_flow_15 >= big_flow_15m:
+                if f"{coin}_1h大流入" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_1h大流入"] = True
+                    alerts.append(f"🟢 1h资金大幅流入${flow_1h/10000:.1f}万，15分钟持续进场，主力真金白银买入")
+            # 大流入解锁：1h资金反向走全额阈值（滞回，防止横盘来回抖）
+            if f"{coin}_1h大流入" in SIGNAL_LOCK and flow_1h <= -big_flow_1h:
+                del SIGNAL_LOCK[f"{coin}_1h大流入"]
+            if flow_1h <= -big_flow_1h and prev_flow < 0 and recent_flow_15 <= -big_flow_15m:
+                if f"{coin}_1h大流出" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_1h大流出"] = True
+                    alerts.append(f"🔴 1h资金大幅流出${-flow_1h/10000:.1f}万，15分钟持续跑路，主力真金白银卖出")
+            # 大流出解锁：1h资金反向走全额阈值（滞回，防止横盘来回抖）
+            if f"{coin}_1h大流出" in SIGNAL_LOCK and flow_1h >= big_flow_1h:
+                del SIGNAL_LOCK[f"{coin}_1h大流出"]
+            # 更新上一轮资金值
+            FLOW_PREV[coin] = flow_1h
+            # 3. 大户极端多空比（加默认值，避免KeyError）
+            top_ratio = ind_s.get('top_ratio', 1.0)
+            if top_ratio > 1.8:
+                if f"{coin}_大户极端多" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_大户极端多"] = True
+                    alerts.append(f"🟢 大户多空比{top_ratio:.2f}，极端看多")
+            # 大户极端多解锁：多空比回到1.2
+            if f"{coin}_大户极端多" in SIGNAL_LOCK and top_ratio <=1.2:
+                del SIGNAL_LOCK[f"{coin}_大户极端多"]
+            elif top_ratio < 0.6:
+                if f"{coin}_大户极端空" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_大户极端空"] = True
+                    alerts.append(f"🔴 大户多空比{top_ratio:.2f}，极端看空")
+            # 大户极端空解锁：多空比回到0.8
+            if f"{coin}_大户极端空" in SIGNAL_LOCK and top_ratio >=0.8:
+                del SIGNAL_LOCK[f"{coin}_大户极端空"]
+            # 4. 从最近30分钟高点回撤≥1.5倍ATR/从最近30分钟低点反弹≥1.5倍ATR（动态阈值）
+            if (ind_s['close'] - recent_low_30m)/recent_low_30m*100 >= bounce_thresh:
+                if f"{coin}_大反弹" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_大反弹"] = True
+                    alerts.append(f"🟢 从30分钟变盘点反弹{(ind_s['close']-recent_low_30m)/recent_low_30m*100:.1f}%，趋势转多")
+            # 大反弹解锁：从最近30分钟高点回撤1倍ATR（滞回缓冲）
+            if f"{coin}_大反弹" in SIGNAL_LOCK and (recent_high_30m - ind_s['close'])/recent_high_30m*100 >= atr_pct:
+                del SIGNAL_LOCK[f"{coin}_大反弹"]
+            elif (recent_high_30m - ind_s['close'])/recent_high_30m*100 >= bounce_thresh:
+                if f"{coin}_大回撤" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_大回撤"] = True
+                    alerts.append(f"🔴 从30分钟变盘点回撤{(recent_high_30m-ind_s['close'])/recent_high_30m*100:.1f}%，趋势转空")
+            # 大回撤解锁：从最近30分钟低点反弹1倍ATR（滞回缓冲）
+            if f"{coin}_大回撤" in SIGNAL_LOCK and (ind_s['close'] - recent_low_30m)/recent_low_30m*100 >= atr_pct:
+                del SIGNAL_LOCK[f"{coin}_大回撤"]
+            # ==============================================
+            # 【2026-10-05 新增】V型反弹/见顶回落单独推飞书
+            # 逻辑：从30分钟低点反弹1.5-3%推V反，从高点跌1.5-3%推见顶回落
+            # 统一锁机制，同一波只推一次，反向自动解锁
+            # ==============================================
+            v_bounce = (ind_s['close'] - recent_low_30m)/recent_low_30m*100
+            # 【2026-10-05 18:35 优化V反信号】加两个过滤条件：1.最近30分钟必须先急跌≥1% 2.15分钟资金必须净流入，过滤假反弹
+            pre_drop = (recent_high_30m - recent_low_30m)/recent_high_30m*100
+            if 1.5 <= v_bounce <=3 and pre_drop >=1 and recent_flow_15 > 0:
+                if f"{coin}_V反" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_V反"] = True
+                    alerts.append(f"🟢 V型反弹，先急跌后资金进场，从30分钟低点反弹{v_bounce:.1f}%，短线反弹机会")
+            # V反解锁：反弹超过3%或者从高点回落1.5%
+            if f"{coin}_V反" in SIGNAL_LOCK and (v_bounce>3 or (recent_high_30m-ind_s['close'])/recent_high_30m*100>=1.5):
+                del SIGNAL_LOCK[f"{coin}_V反"]
+            # 对称：见顶回落信号，同样优化：先急涨≥1%+15分钟资金净流出
+            pre_rise = (recent_high_30m - recent_low_30m)/recent_low_30m*100
+            v_drop = (recent_high_30m - ind_s['close'])/recent_high_30m*100
+            if 1.5 <= v_drop <=3 and pre_rise >=1 and recent_flow_15 < 0:
+                if f"{coin}_见顶回落" not in SIGNAL_LOCK:
+                    SIGNAL_LOCK[f"{coin}_见顶回落"] = True
+                    alerts.append(f"🔴 见顶回落，先急涨后资金流出，从30分钟高点下跌{v_drop:.1f}%，短线注意风险")
+            # 见顶回落解锁：跌超过3%或者从低点反弹1.5%
+            if f"{coin}_见顶回落" in SIGNAL_LOCK and (v_drop>3 or (ind_s['close']-recent_low_30m)/recent_low_30m*100>=1.5):
+                del SIGNAL_LOCK[f"{coin}_见顶回落"]
+            # ==============================================
             # 【2026-10-05 新增】第一级紧急预警打分
             # 逻辑：6项指标打分，≥30分（3个信号共振）才推飞书，快速抓变盘
             # ==============================================
@@ -677,6 +879,16 @@ def monitor_once():
             emerg_buy_reasons = []
             emerg_sell_score = 0
             emerg_sell_reasons = []
+            # 给所有打分用到的变量加默认值，避免未定义报错
+            upper_shadow = 0
+            lower_shadow = 0
+            body = 1
+            funding_rate = 0
+            recent_flow_15 = 0
+            # 2026-10-05 结论打分用到的变量加默认值
+            ind_s['ema20'] = ind_s.get('ema20', ind_s['close'])
+            ind_s['kdj_j'] = ind_s.get('kdj_j', 50)
+            ind_s['boll_m'] = ind_s.get('boll_m', ind_s['close'])
             # 紧急低吸打分项
             recent_chg_30m = df_s['close'].iloc[-1]/df_s['close'].iloc[-3]-1
             if recent_chg_30m <= -0.015:
@@ -772,7 +984,9 @@ def monitor_once():
             if top_ratio >1.1:
                 buy_score +=10
                 buy_reasons.append("大户偏多")
-            # 盘口承接
+            # 盘口承接（加默认值避免未定义报错）
+            buy_depth = 0
+            sell_depth = 0
             if buy_depth > sell_depth*1.2:
                 buy_score +=10
                 buy_reasons.append("盘口承接强")
@@ -829,7 +1043,14 @@ def monitor_once():
             # 解锁状态：分数跌到≤30才解锁下一次推送
             global SCORE_LOCK
             if 'SCORE_LOCK' not in globals():
-                SCORE_LOCK = {'buy':set(), 'sell':set()}
+                SCORE_LOCK = {'buy':set(), 'sell':set(), 'buy_warn':set(), 'sell_warn':set()}
+            # 【2026-10-06 恢复】30分紧急预警推送
+            if buy_score >=30 and coin not in SCORE_LOCK['buy_warn']:
+                SCORE_LOCK['buy_warn'].add(coin)
+                alerts.append(f"🟡 低吸预警，买入分{buy_score}/110，开始关注，满足：{'、'.join(buy_reasons)}")
+            # 买分跌回≤20，解锁预警
+            if buy_score <=20 and coin in SCORE_LOCK['buy_warn']:
+                SCORE_LOCK['buy_warn'].remove(coin)
             # 触发低吸提醒：买入分≥90（11项里至少9项共振），且没锁
             if buy_score >=90 and coin not in SCORE_LOCK['buy']:
                 SCORE_LOCK['buy'].add(coin)
@@ -837,6 +1058,13 @@ def monitor_once():
             # 买入分跌回≤30，解锁买入
             if buy_score <=30 and coin in SCORE_LOCK['buy']:
                 SCORE_LOCK['buy'].remove(coin)
+            # 【2026-10-06 恢复】30分高抛预警推送
+            if sell_score >=30 and coin not in SCORE_LOCK['sell_warn']:
+                SCORE_LOCK['sell_warn'].add(coin)
+                alerts.append(f"🟡 高抛预警，卖出分{sell_score}/110，开始关注，满足：{'、'.join(sell_reasons)}")
+            # 卖分跌回≤20，解锁预警
+            if sell_score <=20 and coin in SCORE_LOCK['sell_warn']:
+                SCORE_LOCK['sell_warn'].remove(coin)
             # 触发高抛提醒：卖出分≥90（11项里至少9项共振），且没锁
             if sell_score >=90 and coin not in SCORE_LOCK['sell']:
                 SCORE_LOCK['sell'].add(coin)
@@ -844,6 +1072,42 @@ def monitor_once():
             # 卖出分跌回≤30，解锁卖出
             if sell_score <=30 and coin in SCORE_LOCK['sell']:
                 SCORE_LOCK['sell'].remove(coin)
+            # ==============================================
+            # 【2026-10-05 新增】慢涨刚启动监测
+            # 逻辑：刚从低位涨1.5%-2.5%+资金流入+连续2根阳线就推
+            # 同一波上涨不重复推，变盘跌破MA20/资金流出/回撤3%就解锁
+            # ==============================================
+            # 算从今日低点的涨幅
+            chg_from_low = (ind_s['close'] - today_low) / today_low * 100
+            # 判断是否连续2根阳线
+            two_yang = len(df_s)>=2 and df_s.iloc[-1]['close']>df_s.iloc[-1]['open'] and df_s.iloc[-2]['close']>df_s.iloc[-2]['open']
+            # 触发慢涨启动：从低点涨1.5-2.5% + 15分钟资金流入 + 连续2阳
+            if 1.5 <= chg_from_low <= 2.5 and recent_flow_15>0 and two_yang:
+                if coin not in SLOW_START_LOCK:
+                    SLOW_START_LOCK[coin] = True
+                    alerts.append(f"🟢 慢涨刚启动，从低点涨{chg_from_low:.1f}%，资金流入+连续小阳，可小仓位跟进，止损设MA20")
+            # 变盘解锁条件
+            if coin in SLOW_START_LOCK:
+                # 跌破MA20/15m资金流出/从高点回撤3%，解锁
+                if ind_s['close'] < ind_s['ma20'] or recent_flow_15<0 or (recent_high_30m - ind_s['close'])/recent_high_30m*100 >=3:
+                    del SLOW_START_LOCK[coin]
+            # 【2026-10-06 新增】调用标准函数判断缩量慢涨/慢跌启动信号
+            rise_sig = check_shrink_rise(coin, df_s, ind_s)
+            if rise_sig and coin not in SHRINK_LOCK['rise']:
+                SHRINK_LOCK['rise'].add(coin)
+                alerts.append(rise_sig)
+            # 慢涨解锁：连续2根阴线就解锁
+            if len(df_s)>=2 and coin in SHRINK_LOCK['rise']:
+                if df_s.iloc[-1]['close'] < df_s.iloc[-1]['open'] and df_s.iloc[-2]['close'] < df_s.iloc[-2]['open']:
+                    SHRINK_LOCK['rise'].remove(coin)
+            drop_sig = check_shrink_drop(coin, df_s, ind_s)
+            if drop_sig and coin not in SHRINK_LOCK['drop']:
+                SHRINK_LOCK['drop'].add(coin)
+                alerts.append(drop_sig)
+            # 慢跌解锁：连续2根阳线就解锁
+            if len(df_s)>=2 and coin in SHRINK_LOCK['drop']:
+                if df_s.iloc[-1]['close'] > df_s.iloc[-1]['open'] and df_s.iloc[-2]['close'] > df_s.iloc[-2]['open']:
+                    SHRINK_LOCK['drop'].remove(coin)
             if alerts:
                 alert_str = ''.join(alerts)
                 key = stable_alert_key(coin, alert_str)
@@ -899,7 +1163,8 @@ def monitor_once():
             except Exception as _pe:
                 print(f"[面板] {coin} 视图收集失败：{type(_pe).__name__}: {_pe}", flush=True)
             # 只有这个币触发了重要操作信号，才输出详细分析，否则跳过
-            has_important = any(('止盈' in x or '买入' in x or '卖出' in x or '高抛' in x or '急跌V反' in x or '超卖下轨' in x or '突破BOLL上轨' in x or '真高' in x or '真底' in x) for x in alerts)
+            # 2026-10-06 把缩量慢涨/慢跌信号加入推飞书强信号列表
+            has_important = any(('止盈' in x or '买入' in x or '卖出' in x or '高抛' in x or '急跌V反' in x or '超卖下轨' in x or '突破BOLL上轨' in x or '真高' in x or '真底' in x or '缩量慢涨' in x or '缩量慢跌' in x) for x in alerts)
             if not has_important:
                 continue
             lines.append(f"## {coin}/USDT 全方位分析:")
@@ -907,10 +1172,16 @@ def monitor_once():
             lines.append(f"- **现价**: ${ind_s['close']:.4f}，今日 {ind_s['day_chg']:+.2f}%")
             lines.append(f"- **当日高低点**: 低{today_low:.4f} / 高{today_high:.4f}")
             lines.append(f"- **当前位置**: 从低点反弹{rise_low:.1f}% / 从高点回撤{drawdown_high:.1f}%")
+            # 2026-10-07 新增：展示最近30分钟变盘点位置，和信号触发口径一致
+            low_30m = df_s['low'].tail(3).min()
+            high_30m = df_s['high'].tail(3).max()
+            rise_30m = (ind_s['close'] - low_30m)/low_30m*100
+            drawdown_30m = (high_30m - ind_s['close'])/high_30m*100
+            lines.append(f"- **变盘位置**: 从最近30分钟低点反弹{rise_30m:.1f}% / 从最近30分钟高点回撤{drawdown_30m:.1f}%")
             lines.append(f"- **移动止盈**: 阈值{trail_thr:.1f}%，还差{trail_thr - drawdown_high:.1f}%触发")
             trend_emoji = "🟢" if ind_s['trend_up'] else "🔴"
             trend_text = "上涨" if ind_s['trend_up'] else "下跌"
-            trend_judge = "15分钟站上MA20" if ind_s['trend_up'] else "15分钟跌破MA20"
+            trend_judge = "15分钟站上EMA20" if ind_s['trend_up'] else "15分钟跌破EMA20"  # 2026-10-05 改显示为EMA20，和实际指标一致
             lines.append(f"- **趋势**: {trend_emoji} {trend_text}（{trend_judge}）")
             lines.append(f"- **RSI**: 15m {ind_s['rsi']:.1f} / 1h {ind_l['rsi']:.1f}（中性）")
             space_up = (ind_s['boll_u'] - ind_s['close'])/ind_s['close']*100
@@ -942,7 +1213,11 @@ def monitor_once():
             daily_text = "🟢" if daily_up else "🔴"
             daily_judge = "日线向上" if daily_up else "日线向下"
             lines.append(f"- **日线趋势**: {daily_text} {daily_judge}")
-            sync_text = "和BTC同步" if ind_s['day_chg']*btc_chg>0 else "和BTC背离"
+            # 2026-10-05 21:00 修复：分析BTC自身时不判断联动，直接显示自身走势
+            if 'BTC' in coin:
+                sync_text = "自身走势"
+            else:
+                sync_text = "和BTC同步" if ind_s['day_chg']*btc_chg>0 else "和BTC背离"
             lines.append(f"- **BTC联动**: BTC{btc_chg:+.2f}%（{sync_text}）")
             # 加关键支撑压力位
             lines.append(f"- **关键价位**: 下方支撑{today_low:.4f}，上方压力{today_high:.4f}")
@@ -1004,16 +1279,40 @@ def monitor_once():
                     sell_score += 2
                 if any('急跌V反' in a for a in alerts):
                     buy_score += 2
-                # 直接给最终唯一结论
-                if sell_score >= buy_score and sell_score >=5:
-                    hold_advice = "现在优先逢高减仓"
-                    empty_advice = "现在别接盘，等回调"
-                elif buy_score > sell_score and buy_score >=5:
-                    hold_advice = "现在可以持有，别割肉"
-                    empty_advice = "现在可以小仓低吸"
+                # 直接给最终唯一结论（2026-10-05 20:45 修正：资金判断用分档阈值，和信号触发一致）
+                final_score = 0
+                # 偏多加分项
+                if daily_up:
+                    final_score +=1
+                if flow_1h >= big_flow_1h:
+                    final_score +=1
+                if recent_flow_15 > 0:
+                    final_score +=1
+                if ind_s.get('kdj_j',50) < 20:
+                    final_score +=1
+                if ind_s['close'] > ind_s.get('boll_m', ind_s['close']):
+                    final_score +=1
+                # 偏空减分项
+                if ind_s['close'] < ind_s.get('ema20', ind_s['close']):
+                    final_score -=1
+                if flow_1h <= -big_flow_1h:
+                    final_score -=1
+                if recent_flow_15 < 0:
+                    final_score -=1
+                if ind_s.get('kdj_j',50) > 80:
+                    final_score -=1
+                if upper_count >=2:
+                    final_score -=1
+                # 按分数给明确建议
+                if final_score >=2:
+                    hold_advice = "🟢 持有，可逢低加仓"
+                    empty_advice = "🟢 低吸机会，可小仓建仓"
+                elif final_score <=-2:
+                    hold_advice = "🔴 逢高减仓，注意回调"
+                    empty_advice = "🔴 别接盘，等企稳再看"
                 else:
-                    hold_advice = "持有观望，不动"
-                    empty_advice = "观望，等明确信号"
+                    hold_advice = "🟡 持有观望，不动"
+                    empty_advice = "🟡 观望，等明确信号"
             lines.append("")
             lines.append(f"**📌 结论**: {trend_judge}，资金{flow_judge}，{daily_judge}")
             lines.append(f"**💼 持仓建议**: {hold_advice}")
@@ -1024,6 +1323,22 @@ def monitor_once():
             traceback.print_exc()
             print(f"{coin}出错: {e}")
             continue
+    # 2026-10-07 新增：板块联动判断
+    ai_coins = ['SUI', 'WLD', 'CYS']
+    main_coins = ['BTC', 'BSV', 'DOGE']
+    ai_up = sum(1 for c in ai_coins if coin_chg.get(c,0) > 1)
+    ai_down = sum(1 for c in ai_coins if coin_chg.get(c,0) < -1)
+    main_up = sum(1 for c in main_coins if coin_chg.get(c,0) > 1)
+    main_down = sum(1 for c in main_coins if coin_chg.get(c,0) < -1)
+    # AI板块3个币里有2个以上同涨/同跌超过1%，加板块提醒
+    if ai_up >=2:
+        lines.append(f"- 🌐 AI板块联动上涨：SUI/WLD/CYS中{ai_up}个涨超1%，板块行情可持有")
+    if ai_down >=2:
+        lines.append(f"- 🌐 AI板块联动下跌：SUI/WLD/CYS中{ai_down}个跌超1%，板块回调注意风险")
+    if main_up >=2:
+        lines.append(f"- 🌐 主流币联动上涨：BTC/BSV/DOGE中{main_up}个涨超1%，大盘行情")
+    if main_down >=2:
+        lines.append(f"- 🌐 主流币联动下跌：BTC/BSV/DOGE中{main_down}个跌超1%，大盘回调")
     if alerts_all:
         alert_lines = ["", f"## 🔔 新信号({len(alerts_all)}个币))", ""]
         need_detail = False

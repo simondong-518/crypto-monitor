@@ -21,6 +21,39 @@ def calc_macd(closes):
     macd = (dif - dea) * 2
     return dif, dea, macd
 
+# 2026-10-07 新增：标准可复用函数，判断真假BOLL破轨，过滤插针假突破
+# 锁机制：第一次破轨先锁，下一根K线还在外面才算真破，回来就解锁
+BOLL_BREAK_LOCK = {}
+def check_boll_breakout(df_s, close, boll_u, boll_l, coin):
+    """
+    返回值:
+    'true_break_up' = 真突破上轨
+    'true_break_down' = 真跌破下轨
+    None = 假突破/没破轨
+    """
+    key_up = f"{coin}_break_up"
+    key_down = f"{coin}_break_down"
+    # 先判断状态解锁：如果价格回到轨道内，解锁
+    if key_up in BOLL_BREAK_LOCK and close < boll_u:
+        del BOLL_BREAK_LOCK[key_up]
+    if key_down in BOLL_BREAK_LOCK and close > boll_l:
+        del BOLL_BREAK_LOCK[key_down]
+    # 第一次破上轨：先锁，不推
+    if close > boll_u:
+        if key_up not in BOLL_BREAK_LOCK:
+            BOLL_BREAK_LOCK[key_up] = True
+            return None  # 第一次破轨，等下一根确认
+        else:
+            return 'true_break_up'  # 连续两根在外面，真突破
+    # 第一次破下轨：先锁，不推
+    if close < boll_l:
+        if key_down not in BOLL_BREAK_LOCK:
+            BOLL_BREAK_LOCK[key_down] = True
+            return None  # 第一次破轨，等下一根确认
+        else:
+            return 'true_break_down'  # 连续两根在外面，真跌破
+    return None
+
 def calc_kdj(df, n=9):
     low_list = df['low'].rolling(n).min()
     high_list = df['high'].rolling(n).max()

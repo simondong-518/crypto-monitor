@@ -3,18 +3,11 @@ import time
 import json
 import os
 
-# ==============================================
-# 推送通道：飞书为主，**失败必须看得见**，且不依赖网络的通道永远兜底
-#
-# 为什么要这么改（原来三个问题）：
-#   1) requests.post(...) 不看返回值 → 飞书返回 code!=0（限流/被拒）时也算成功，
-#      pushed.json 的计数照 +1 → 报警永久丢失且没人知道
-#   2) 只有一条通道 → 飞书一挂，报警全丢
-#   3) webhook 明文写在代码里 → 已公开，请务必重置并从环境变量/本地配置读
-# ==============================================
+# 飞书机器人webhook
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/826f273f-3426-4262-af40-f301707e4079"
 
 # 飞书机器人 webhook：优先读环境变量，其次 config_local.py（不进仓库），最后才是这里的默认空值
-FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK", "")
+FEISHU_WEBHOOK = os.environ.get("FEISHU_WEBHOOK") or FEISHU_WEBHOOK
 try:
     from config_local import FEISHU_WEBHOOK as _FW   # 本机私有配置（.gitignore 里已排除）
     if _FW:

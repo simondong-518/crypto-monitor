@@ -17,3 +17,6 @@ venv/
 github_download/
 ~$*.docx
 .DS_Store
+# _merge 工具的临时文件与备份（每次合并自动生成）
+_merge/_tmp/
+*.bak_*

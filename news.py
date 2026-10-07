@@ -6,13 +6,13 @@ from datetime import datetime
 # 6个币关键词
 COIN_KEYWORDS = ["SUI", "WLD", "CYS", "BSV", "DOGE", "BTC", "狗狗币", "比特币"]
 # 宏观风险关键词
-MACRO_KEYWORDS = ["非农", "美联储", "加息", "降息", "CPI", "PCE", "暴跌", "暴涨"]
+MACRO_KEYWORDS = ["非农", "美联储", "加息", "降息", "CPI", "PCE", "暴跌", "暴涨", "SEC", "ETF"]
 
 def get_latest_news():
-    """爬金色财经最新新闻，返回和咱们币相关的列表。
+    """取新闻（对方的新源 + 我方缓存）。
 
-    走缓存：资讯不是每分钟都变，且这个源在**别的域名**上 —— 它不占
-    Gate 的额度，但同样是每轮一次的请求，能省则省。
+    我方补充：走缓存 —— 资讯不是每分钟都变，能省则省。
+    源换成了对方的（国内可访问），抓取逻辑在 _fetch_news。
     """
     try:
         import kline_cache
@@ -27,8 +27,8 @@ def get_latest_news():
 
 def _fetch_news():
     try:
-        # 金色财经RSS
-        url = "https://www.jinse.com/lives.rss"
+        # 律动快讯RSS（国内第三方节点，已测试连通）
+        url = "https://rsshub.dicomp.net/theblockbeats/newsflash"
         r = requests.get(url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
         text = r.text
         items = re.findall(r'<item>(.*?)</item>', text, re.S)

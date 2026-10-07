@@ -88,8 +88,9 @@ def _lf(path):
 
 
 def _merge_file(base, ours, theirs, auto_theirs):
-    tmp = os.path.join(HERE, "_tmp")
-    os.makedirs(tmp, exist_ok=True)
+    # 临时文件放系统临时目录，不放仓库里（避免污染工作区 / 误提交）
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="reapply_")
     p = {}
     for name, text in (("base", base), ("ours", ours), ("theirs", theirs)):
         p[name] = os.path.join(tmp, name + ".py")
