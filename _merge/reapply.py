@@ -39,7 +39,7 @@ ROOT = os.path.dirname(HERE)
 BASE_DIR = os.path.join(HERE, "base")
 
 # 默认合并这些（我们会改、他也可能改的）
-DEFAULT_FILES = ["main.py", "notifier.py", "news.py", "indicators.py"]
+DEFAULT_FILES = ["main.py", "notifier.py", "news.py", "indicators.py", "backtest.py"]
 
 # ── 我方接缝清单：合并后必须都在 ────────────────────────────────
 SEAMS = {

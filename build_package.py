@@ -23,13 +23,16 @@ FILES = [
     "push_switch.py", "small_signal_switch.py", "gate_keys.py", "kline_cache.py",
     "verify_alerts.py", "verify_boll.py", "verify_cache.py", "verify_keys.py",
     "verify_panel.py", "verify_push_switch.py", "verify_signal_tiers.py",
-    "verify_small_switch.py", "preview_boll.py",
+    "verify_small_switch.py", "verify_backtest.py", "preview_boll.py",
+    # —— 回测审计工具（报告里引用的证据脚本，可复现）——
+    "audit_backtest.py", "audit_fantasy_price.py", "audit_backtest_honest.py",
+    "audit_backtest_fixed.py", "audit_real_signals.py", "audit_by_type.py",
     # —— 配置模板 ——
     "config_local.py.example",
     # —— 依赖 ——
     "requirements.txt",
     # —— 文档 ——
-    "合并说明_20261007.md", "对方代码问题清单.md",
+    "合并说明_20261007.md", "回测审计报告_20261008.md", "对方代码问题清单.md",
     "使用说明.md", "全方位分析模板.png", "策略版本记录.docx",
     # —— 他的启动脚本（原样带上，路径他自己改）——
     "自动重启.bat",
