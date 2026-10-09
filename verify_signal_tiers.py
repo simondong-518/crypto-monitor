@@ -72,8 +72,14 @@ chk("回归·突破前高(应非报告)", "🚀 突破前高0.5%，正在创新�
 
 # ══════ 四、用真实代码里的文案全量回归 ══════
 import re
-src = io.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py"),
-              encoding="utf-8").read()
+_here = os.path.dirname(os.path.abspath(__file__))
+SRC_FILES = ["main.py", "signals.py", "report.py", "pushing.py", "alerting.py"]
+src = ""
+for _f in SRC_FILES:
+    try:
+        src += io.open(os.path.join(_here, _f), encoding="utf-8").read() + "\n"
+    except OSError:
+        pass
 texts = re.findall(r'alerts\.append\(f?"([^"]{4,120})', src)
 # 去掉 f-string 占位符，留文字骨架
 cleaned = sorted({re.sub(r"\{[^}]*\}", "X", t) for t in texts})

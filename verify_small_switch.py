@@ -52,8 +52,14 @@ with open(sss.SWITCH_FILE, "w", encoding="utf-8") as f:
     _json.dump({"enabled": False, "changed_at": "ext", "changed_by": "other"}, f)
 check("再改回也立刻可见", sss.is_enabled() is False)
 
-# ── 5) ★ 与 main.py 的接线正确性（静态检查）──────────────────
-src = open("main.py", encoding="utf-8").read()
+# ── 5) ★ 接线正确性（静态检查；架构分离后信号代码在 signals.py，合并读）──
+SRC_FILES = ["main.py", "signals.py", "report.py", "pushing.py", "alerting.py"]
+src = ""
+for _f in SRC_FILES:
+    try:
+        src += open(_f, encoding="utf-8").read() + "\n"
+    except OSError:
+        pass
 
 check("main.py 里保留了小信号（不再直接丢）",
       "small_alerts = [x for x in alerts if not _is_report_signal(x)]" in src

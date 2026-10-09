@@ -43,8 +43,14 @@ check("★ 都不满足 → 0 分，不触发", score(False, False) == 0)
 check("★ 15m 是必要条件（15m 不满足永不触发）",
       all(score(False, x) < 60 for x in (True, False)))
 
-# ── main.py 接线 ────────────────────────────────────────
-src = open("main.py", encoding="utf-8").read()
+# ── 接线检查（架构分离后：信号/报告/推送分散到多个模块，合并读）──
+SRC_FILES = ["main.py", "signals.py", "report.py", "pushing.py", "alerting.py"]
+src = ""
+for _f in SRC_FILES:
+    try:
+        src += open(_f, encoding="utf-8").read() + "\n"
+    except OSError:
+        pass
 check("★ 旧变量已彻底移除",
       "boll_u_now" not in src and "boll_m_now" not in src
       and "boll_l_now" not in src and "boll_u_prev" not in src)
