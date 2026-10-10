@@ -23,7 +23,11 @@ python _refactor/extract.py --write   # 真正写文件（自动备份 main.py�
 
 ## 注意
 
-- 它读的是**原始** `main.py`。重新跑之前，先恢复备份：
+- ⚠️ **它是一次性工具**。`signals.py` / `report.py` / `pushing.py` / `alerting.py`
+  已经是**活代码**，后续功能改动直接改这些文件即可；
+  **不要再跑 `extract.py --write`**，否则会把它们覆盖回"纯搬运"的状态。
+  （所以它的切片里**不包含**后来加的 `siglog` 接线。）
+- 它读的是**原始** `main.py`。真要从头重建，先恢复备份：
   `cp _refactor/main.py.bak_* main.py`（备份被 `.gitignore` 的 `*.bak_*` 排除，
   克隆下来没有这个文件时，可从 git 历史取分离前的那一版）。
 - 切片边界变了要同步改 `extract.py` 里的 `find(...)` 标记；

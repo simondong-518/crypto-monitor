@@ -102,6 +102,11 @@ import api
 requests.get = spy
 api.requests = requests
 import main
+import siglog
+import tempfile
+# 结构化信号日志：写到临时目录，别把自检数据混进真实 signal_logs/
+# （本脚本会真跑两轮 monitor_once 取真实行情，属于有意为之的联网测试）
+siglog.LOG_DIR = tempfile.mkdtemp(prefix="vrcache_siglog_")
 import notifier
 notifier.NOTIFY_CONSOLE = False
 try:

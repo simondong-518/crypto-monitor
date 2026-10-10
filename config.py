@@ -71,6 +71,10 @@ PANEL_REFRESH_SEC = 10       # 前端每隔几秒问一次"有没有新数据"�
 #   理由：这个开关存在的意义就是"别打扰对方"，默认开=风险。
 PUSH_ENABLED_DEFAULT = False     # 首次运行的默认状态（改 True 则默认就推）
 
+# 【2026-10-10 新增】结构化信号日志：每轮每个币一行 JSONL（工具层，不参与判定）
+#   目的：面板只显示当前状态、alerts.log 只记推送留痕 → 补成可回溯的完整历史
+SIGLOG_ENABLED = True
+
 # 监测间隔（秒）
 CHECK_INTERVAL = 60
 # 回测间隔（秒，默认4小时）

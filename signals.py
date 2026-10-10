@@ -20,6 +20,7 @@ from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
 from alert_state import stable_alert_key
 from alerting import pushed, should_alert, mark_alert, save_pushed
+import siglog                      # 结构化信号日志（工具层，不参与判定）
 
 # 只读 H5 面板（展示层）—— 不参与判定；导入失败也不能挡住监控
 try:
@@ -1125,6 +1126,17 @@ def evaluate_coin(pair, coin, btc_chg, alerts_all, lines, coin_chg, panel_coins)
                 ))
         except Exception as _pe:
             print(f"[面板] {coin} 视图收集失败：{type(_pe).__name__}: {_pe}", flush=True)
+        # ── 结构化信号日志（工具层：只落盘，不参与任何判定）──
+        # 放在 has_important 的 return 之前，所以**没触发信号的币也会记一行**，
+        # 这正是 alerts.log（只记推送留痕）缺的那部分。
+        try:
+            siglog.record(coin=coin, pair=pair, ind_s=ind_s, ind_l=ind_l,
+                          flow=flow, score=(b_score, s_score),
+                          signal=current_signal if "current_signal" in dir() else "",
+                          alerts=alerts,
+                          report=any(_is_report_signal(x) for x in alerts))
+        except Exception as _le:
+            print(f"[信号日志] {coin} 写入失败：{type(_le).__name__}: {_le}", flush=True)
         # 只有这个币触发了**带完整报告的重要信号**，才输出详细分析，否则跳过
         # 【2026-10-07 改】原来用模糊关键词（'止盈'/'买入'/'卖出'…）判，
         #   会把"1h资金大幅流入…真金白银**买入**"这种强单信号误判成重要信号，
@@ -1167,4 +1179,8 @@ def evaluate_coin(pair, coin, btc_chg, alerts_all, lines, coin_chg, panel_coins)
         import traceback
         traceback.print_exc()
         print(f"{coin}出错: {e}")
+        try:
+            siglog.record_error(coin, pair, e)   # 让缺口可见，而不是静默少一行
+        except Exception:
+            pass
         return None

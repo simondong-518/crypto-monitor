@@ -31,6 +31,7 @@ from signals import (SLOW_START_LOCK, SIGNAL_LOCK, FLOW_PREV,
 from alert_state import stable_alert_key
 import report
 import pushing
+import siglog
 from backtest import backtest, daily_backtest, last_result as last_backtest_result
 
 # 只读 H5 面板（展示层）—— 不参与判定；导入失败也不能挡住监控
@@ -48,6 +49,7 @@ last_backtest_result = ""
 
 def monitor_once():
     """一轮监测：市场级提醒 → 逐币判定 → 分级推送 → 面板发布。"""
+    siglog.round_start()          # 给本轮所有记录一个统一轮次号（工具层）
     _round_t0 = time.time()      # 面板"上一轮耗时"用（纯展示）
     panel_coins = []             # 面板：本轮各币只读视图
     btc_chg = get_btc_chg()

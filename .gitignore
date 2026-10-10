@@ -20,3 +20,8 @@ github_download/
 # _merge 工具的临时文件与备份（每次合并自动生成）
 _merge/_tmp/
 *.bak_*
+# 结构化信号日志（运行时数据，按天增长，不入库）
+signal_logs/
+# 分析产物（脚本入库，产物不入库）
+analysis/信号导出_*/
+analysis/candles_*.json
