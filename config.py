@@ -25,7 +25,7 @@ VERSION_DATE = "2026-10-04"
 BASE = "https://api.gateio.ws/api/v4"
 
 # 监测币种
-CURRENCY_PAIRS = ["CYS_USDT", "SUI_USDT", "WLD_USDT", "BSV_USDT", "DOGE_USDT", "BTC_USDT"]
+CURRENCY_PAIRS = ["WLD_USDT", "SUI_USDT", "DOGE_USDT"]
 
 # Server酱SendKey（对方原有，保留原样；两人小项目直接可用）
 # 说明：config_local.py 若也定义了同名项，末尾的 import 会覆盖这里 ——

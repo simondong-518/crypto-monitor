@@ -8,7 +8,7 @@ import os, io, re, shutil, zipfile, sys
 
 SRC = r"M:\hermes\workspace\dev\crypto-monitor-v3"
 OUT = r"M:\hermes\workspace\dev\dist"
-NAME = "crypto-monitor_合并版_20261007"
+NAME = "crypto-monitor_三币版_20261011"
 STAGE = os.path.join(OUT, NAME)
 
 # 要打包的文件（平铺，和他的包结构一致）
@@ -21,9 +21,11 @@ FILES = [
     # —— 我们新增 ——
     "panel.py", "panel.html", "panel_chart.py", "panel_adapter.py",
     "push_switch.py", "small_signal_switch.py", "gate_keys.py", "kline_cache.py",
+    # —— 架构分离后的模块（main.py 依赖它们，必须带，否则跑不起来）——
+    "signals.py", "report.py", "pushing.py", "alerting.py", "siglog.py",
     "verify_alerts.py", "verify_boll.py", "verify_cache.py", "verify_keys.py",
     "verify_panel.py", "verify_push_switch.py", "verify_signal_tiers.py",
-    "verify_small_switch.py", "verify_backtest.py", "preview_boll.py",
+    "verify_small_switch.py", "verify_backtest.py", "verify_siglog.py", "preview_boll.py",
     # —— 回测审计工具（报告里引用的证据脚本，可复现）——
     "audit_backtest.py", "audit_fantasy_price.py", "audit_backtest_honest.py",
     "audit_backtest_fixed.py", "audit_real_signals.py", "audit_by_type.py",
@@ -32,6 +34,7 @@ FILES = [
     # —— 依赖 ——
     "requirements.txt",
     # —— 文档 ——
+    "变更说明_20261011.md", "架构分离说明_20261009.md", "信号日志说明_20261010.md",
     "合并说明_20261007.md", "回测审计报告_20261008.md", "对方代码问题清单.md",
     "使用说明.md", "全方位分析模板.png", "策略版本记录.docx",
     # —— 他的启动脚本（原样带上，路径他自己改）——
@@ -60,6 +63,19 @@ for f in FILES:
         copied.append(f)
     else:
         missing.append(f)
+
+# analysis/ 下的分析脚本（放进 analysis/ 子目录，方便他自己复现）
+ANA = ["export_siglog.py"]
+_ad = os.path.join(STAGE, "analysis")
+for f in ANA:
+    s = os.path.join(SRC, "analysis", f)
+    if os.path.isfile(s):
+        if not os.path.isdir(_ad):
+            os.makedirs(_ad)
+        shutil.copy2(s, os.path.join(_ad, f))
+        copied.append("analysis/" + f)
+    else:
+        missing.append("analysis/" + f)
 
 # 安全自检：动态读我们自己 config_local.py 里的 webhook，检查有没有混进包里
 OUR_HOOK = ""
