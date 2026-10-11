@@ -25,3 +25,5 @@ signal_logs/
 # 分析产物（脚本入库，产物不入库）
 analysis/信号导出_*/
 analysis/candles_*.json
+# 轮转下来的旧日志
+panel_run.log.old_*

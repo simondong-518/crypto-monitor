@@ -119,6 +119,12 @@ def install_stubs():
     notifier.send_wx = _send
     push_switch.is_enabled = lambda: False       # 双保险：绝不允许真发
 
+    # 结构化信号日志：把落盘目录改到临时目录，
+    # 否则回放会把「合成数据」写进真实的 signal_logs/，污染历史记录。
+    import tempfile
+    import siglog
+    siglog.LOG_DIR = tempfile.mkdtemp(prefix="vr_siglog_")
+
     # 硬保险：任何漏网的真实网络调用直接炸掉，绝不静默打网络
     import requests
     def _no_net(*a, **k):
