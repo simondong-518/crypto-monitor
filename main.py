@@ -1,4 +1,5 @@
-﻿# -*- coding: utf-8 -*-
+import os
+# -*- coding: utf-8 -*-
 import sys
 import io
 # 强制整个程序用UTF-8编码，解决Windows下中文乱码
@@ -7,6 +8,9 @@ sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 import json
 import time
+# 2026-10-11 全局锁和动态成本跟踪
+PUSH_LOCK = {}
+TRACK = {}
 import re
 # 统一资金换算：亿/万/千
 def fmt_money(v):
@@ -23,7 +27,13 @@ from indicators import get_indicator, get_daily_trend
 from strategy import calc_score, get_signal, last_signal
 from notifier import send_wx
 from news import get_latest_news
-pushed_news = set()
+# 新闻去重持久化，重启不丢
+NEWS_DEDUP_FILE = "news_pushed.json"
+if os.path.exists(NEWS_DEDUP_FILE):
+    with open(NEWS_DEDUP_FILE, "r", encoding="utf-8") as f:
+        pushed_news = set(json.load(f))
+else:
+    pushed_news = set()
 # 【2026-10-05 修复】慢涨启动锁移到全局，不要每次循环都清空
 SLOW_START_LOCK = {}
 # 【2026-10-05 新增】强单信号统一锁字典，每个信号独立锁+解锁
@@ -221,12 +231,16 @@ def monitor_once():
             pushed_news.add(n)
             send_wx("📰 宏观事件提醒", n)
             news_count +=1
+            with open(NEWS_DEDUP_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(pushed_news), f, ensure_ascii=False)
     for n in coin_news:
         if news_count >=5: break
         if n not in pushed_news:
             pushed_news.add(n)
             send_wx("📰 币圈新闻", n)
             news_count +=1
+            with open(NEWS_DEDUP_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(pushed_news), f, ensure_ascii=False)
     # 价格止盈止损提醒：遍历用户设置的止盈止损价位
     for alert_pair, (take_profit, stop_loss) in PRICE_ALERT.items():
         coin = alert_pair.replace("_USDT","")
@@ -607,7 +621,7 @@ def monitor_once():
             tr = tr1.combine(tr2, max).combine(tr3, max)
             atr_pct = tr.rolling(14).mean().iloc[-1]/df_s['close'].iloc[-1]*100
             rush_thresh = 2 * atr_pct  # 急涨阈值：2倍ATR
-            bounce_thresh = 1.5 * atr_pct  # 大反弹阈值：1.5倍ATR
+            bounce_thresh = 2.5 * atr_pct  # 大反弹阈值：1.5倍ATR
             # 2026-10-07 动态移动止盈：从有效高点回撤1.5倍ATR就止盈
             trail_ratio = atr_pct/100 * 1.5
             drawdown = (eff_high - ind_s['close'])/eff_high
@@ -616,38 +630,72 @@ def monitor_once():
                 if key_trail not in pushed:
                     pushed[key_trail] = 1
                     alerts.append(f"⚠️ 从高点回撤{drawdown*100:.1f}%（动态阈值{trail_ratio*100:.1f}%），移动止盈落袋")
-                # 2026-10-11 动态分批止盈：根据资金和多空比自动选阈值，基于真实信号成本
-                # 先判断盘面强弱
+                # 2026-10-11 动态成本跟踪+分批止盈（用现成指标判断）
                 strong_long = (flow_1h > 50000) and (top_ratio > 1.1)
                 strong_short = (flow_1h < -50000) and (top_ratio < 0.9)
-                # 买入信号触发时记录成本
-                if any('低吸' in a or 'V型反弹' in a or '慢涨启动' in a for a in alerts):
-                    TRACK_COST[f'{coin}_buy'] = ind_s['close']
-                if f'{coin}_buy' in TRACK_COST:
-                    cost = TRACK_COST[f'{coin}_buy']
-                    chg_buy = (ind_s['close'] - cost)/cost*100
-                    tp1 = 4 if strong_long else (2.5 if strong_short else 3)
-                    tp2 = 7 if strong_long else (4 if strong_short else 5)
-                    if chg_buy >= tp1 and not f'{coin}_tp1' in PUSH_LOCK:
-                        alerts.append(f"✅ 持仓涨{chg_buy:.1f}%（成本{cost:.4f}），第一批止盈：卖40%，止损移到成本价保本")
-                        PUSH_LOCK[f'{coin}_tp1'] = True
-                    if chg_buy >= tp2 and not f'{coin}_tp2' in PUSH_LOCK:
-                        alerts.append(f"✅ 持仓涨{chg_buy:.1f}%，第二批止盈：再卖30%，剩30%跟移动止盈")
-                        PUSH_LOCK[f'{coin}_tp2'] = True
-                # 卖出信号触发时记录空单成本
-                if any('高抛' in a or '见顶回落' in a or '慢跌启动' in a for a in alerts):
-                    TRACK_COST[f'{coin}_sell'] = ind_s['close']
-                if f'{coin}_sell' in TRACK_COST:
-                    cost_s = TRACK_COST[f'{coin}_sell']
-                    chg_sell = (cost_s - ind_s['close'])/cost_s*100
-                    sl1 = 1.5 if strong_short else (4 if strong_long else 3)
-                    sl2 = 3 if strong_short else (6 if strong_long else 5)
-                    if chg_sell >= sl1 and not f'{coin}_sl1' in PUSH_LOCK:
-                        alerts.append(f"🔻 空单盈利{chg_sell:.1f}%（成本{cost_s:.4f}），第一批止盈：平40%，止损移到成本价保本")
-                        PUSH_LOCK[f'{coin}_sl1'] = True
-                    if chg_sell >= sl2 and not f'{coin}_sl2' in PUSH_LOCK:
-                        alerts.append(f"🔻 空单盈利{chg_sell:.1f}%，第二批止盈：再平30%，剩30%跟移动止盈")
-                        PUSH_LOCK[f'{coin}_sl2'] = True
+                # 1. 买入信号触发：进入多单跟踪状态
+                buy_signal = any('低吸' in a or 'V型反弹' in a or '慢涨启动' in a for a in alerts)
+                if buy_signal and f'{coin}_long' not in TRACK:
+                    TRACK[f'{coin}_long'] = {'low': recent_low_30m, 'locked': False, 'cost': 0}
+                # 多单跟踪中：只要没锁成本，就持续更新最低点
+                if f'{coin}_long' in TRACK:
+                    t = TRACK[f'{coin}_long']
+                    if not t['locked']:
+                        # 持续更新跟踪的最低点
+                        t['low'] = min(t['low'], ind_s['close'], recent_low_30m)
+                        # 数见底条件（用现成指标）
+                        bottom_cnt = 0
+                        if ind_s.get('rsi',50) > 35 and ind_s.get('rsi_prev',50) < 30: bottom_cnt +=1
+                        if ind_s.get('k',50) > ind_s.get('d',50) and ind_s.get('k_prev',50) <= ind_s.get('d_prev',50): bottom_cnt +=1
+                        if flow_1h > 0: bottom_cnt +=1
+                        if ind_s.get('two_up', False): bottom_cnt +=1
+                        if bottom_cnt >=2:
+                            t['cost'] = t['low']
+                            t['locked'] = True
+                    # 成本锁定后算止盈
+                    if t['locked'] and t['cost']>0:
+                        cost = t['cost']
+                        chg_buy = (ind_s['close'] - cost)/cost*100
+                        tp1 = 4 if strong_long else (2.5 if strong_short else 3)
+                        tp2 = 7 if strong_long else (4 if strong_short else 5)
+                        if chg_buy >= tp1 and not f'{coin}_tp1' in PUSH_LOCK:
+                            alerts.append(f"✅ 从确认低点{cost:.4f}涨{chg_buy:.1f}%，第一批止盈：卖40%，止损移到成本价保本")
+                            PUSH_LOCK[f'{coin}_tp1'] = True
+                        if chg_buy >= tp2 and not f'{coin}_tp2' in PUSH_LOCK:
+                            alerts.append(f"✅ 从确认低点涨{chg_buy:.1f}%，第二批止盈：再卖30%，剩30%跟移动止盈")
+                            PUSH_LOCK[f'{coin}_tp2'] = True
+                        # 走完大波段/止损，自动清跟踪状态
+                        if chg_buy >10 or chg_buy < -3:
+                            del TRACK[f'{coin}_long']
+                # 2. 卖出信号触发：进入空单跟踪状态
+                sell_signal = any('高抛' in a or '见顶回落' in a or '慢跌启动' in a for a in alerts)
+                if sell_signal and f'{coin}_short' not in TRACK:
+                    TRACK[f'{coin}_short'] = {'high': recent_high_30m, 'locked': False, 'cost': 0}
+                if f'{coin}_short' in TRACK:
+                    t = TRACK[f'{coin}_short']
+                    if not t['locked']:
+                        t['high'] = max(t['high'], ind_s['close'], recent_high_30m)
+                        top_cnt =0
+                        if ind_s.get('rsi',50) < 65 and ind_s.get('rsi_prev',50) >70: top_cnt +=1
+                        if ind_s.get('k',50) < ind_s.get('d',50) and ind_s.get('k_prev',50) >= ind_s.get('d_prev',50): top_cnt +=1
+                        if flow_1h <0: top_cnt +=1
+                        if ind_s.get('two_down', False): top_cnt +=1
+                        if top_cnt >=2:
+                            t['cost'] = t['high']
+                            t['locked'] = True
+                    if t['locked'] and t['cost']>0:
+                        cost_s = t['cost']
+                        chg_sell = (cost_s - ind_s['close'])/cost_s*100
+                        sl1 = 1.5 if strong_short else (4 if strong_long else 3)
+                        sl2 = 3 if strong_short else (6 if strong_long else 5)
+                        if chg_sell >= sl1 and not f'{coin}_sl1' in PUSH_LOCK:
+                            alerts.append(f"🔻 从确认高点{cost_s:.4f}跌{chg_sell:.1f}%，第一批止盈：平40%，止损移到成本价保本")
+                            PUSH_LOCK[f'{coin}_sl1'] = True
+                        if chg_sell >= sl2 and not f'{coin}_sl2' in PUSH_LOCK:
+                            alerts.append(f"🔻 从确认高点跌{chg_sell:.1f}%，第二批止盈：再平30%，剩30%跟移动止盈")
+                            PUSH_LOCK[f'{coin}_sl2'] = True
+                        if chg_sell>10 or chg_sell < -3:
+                            del TRACK[f'{coin}_short']
             # 资金阈值按币种体量分档
             if 'BTC' in coin or 'BSV' in coin:
                 big_flow_1h = 150000
@@ -1054,6 +1102,29 @@ def monitor_once():
             if len(df_s)>=2 and coin in SHRINK_LOCK['drop']:
                 if df_s.iloc[-1]['close'] > df_s.iloc[-1]['open'] and df_s.iloc[-2]['close'] > df_s.iloc[-2]['open']:
                     SHRINK_LOCK['drop'].remove(coin)
+            # 2026-10-11 统一推送闸门：所有预警类信号最后统一过滤，只推有效趋势信号
+            filtered_alerts = []
+            keep_alert = False
+            for a in alerts:
+                # 止盈/平仓/系统/新闻类提醒不拦，新闻加24小时去重
+                if any(k in a for k in ["止盈", "平仓", "落袋", "回测", "系统", "新闻", "快讯"]):
+                    news_key = a[:50]
+                    if not f"news_{news_key}" in PUSH_LOCK:
+                        PUSH_LOCK[f"news_{news_key}"] = True
+                        filtered_alerts.append(a)
+                    continue
+                # 横盘ADX<18，所有预警类全拦
+                if ind_s.get("adx", 50) < 18:
+                    continue
+                # 偏多信号必须连续2根收阳
+                is_long = any(k in a for k in ["低吸", "V型反弹", "慢涨", "大反弹", "涨", "多", "买入", "净流入", "看涨"])
+                is_short = any(k in a for k in ["高抛", "见顶", "慢跌", "大回撤", "跌", "空", "卖出", "净流出", "看跌"])
+                if is_long and not ind_s.get("two_up", False):
+                    continue
+                if is_short and not ind_s.get("two_down", False):
+                    continue
+                filtered_alerts.append(a)
+            alerts = filtered_alerts
             if alerts:
                 alert_str = ''.join(alerts)
                 stable_alert = re.sub(r'\d+\.?\d*%', '%', alert_str)
